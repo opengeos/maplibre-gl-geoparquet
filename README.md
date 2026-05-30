@@ -15,6 +15,7 @@ or manage the map basemap.
 - Column selection and page size controls
 - Interactive point, line, and polygon rendering with deck.gl
 - Optional feature picking with attribute popups
+- User-configurable layer names and `beforeId` placement for deck.gl layers
 - CRS reprojection to WGS84 when GeoParquet metadata provides a non-WGS84 CRS
 - Viewport reload when GeoParquet bbox covering metadata is available
 - TypeScript and React entry points
@@ -51,6 +52,8 @@ map.on('load', () => {
         'https://example.com/buildings.parquet',
       ],
       pickable: true,
+      layerName: 'Countries',
+      beforeId: 'settlement-label',
     }),
     'top-right'
   );
@@ -75,6 +78,7 @@ function GeoParquetLayer({ map }) {
         'https://example.com/buildings.parquet',
       ]}
       pickable
+      beforeId="settlement-label"
       onStateChange={setState}
     />
   );
@@ -94,12 +98,16 @@ function GeoParquetLayer({ map }) {
 | `className` | `string` | `''` | Extra class on the control button container |
 | `sourceUrl` | `string` | `undefined` | Remote GeoParquet URL to load on add |
 | `sourceUrls` | `string[]` | `undefined` | Multiple remote GeoParquet URLs to load on add |
+| `sampleUrl` | `string` | `undefined` | URL shown in the panel input without auto-loading |
 | `pageSize` | `number` | `10000` | Rows loaded per query |
 | `selectedColumns` | `string[]` | `null` | Attribute columns to load |
 | `fitBoundsOnLoad` | `boolean` | `true` | Fit the map to loaded data |
 | `allowLocalFiles` | `boolean` | `true` | Enable local file input |
 | `allowRemoteUrls` | `boolean` | `true` | Enable remote URL input |
 | `pickable` | `boolean` | `true` | Enable feature clicking and attribute popups |
+| `layerName` | `string` | `undefined` | Initial display name for the next loaded layer |
+| `beforeId` | `string` | `undefined` | Map layer id to insert deck.gl layers before |
+| `interleaved` | `boolean` | `true` | Insert deck.gl layers into the MapLibre layer stack so `beforeId` can apply |
 
 ### Methods
 

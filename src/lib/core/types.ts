@@ -50,6 +50,8 @@ export interface GeoParquetFeatureSelection {
 
 export interface GeoParquetLayerState {
   id: string;
+  name: string;
+  beforeId: string | null;
   source: string;
   displaySource: string;
   schema: GeoParquetColumn[];
@@ -92,12 +94,16 @@ export interface GeoParquetControlOptions {
   className?: string;
   sourceUrl?: string;
   sourceUrls?: string[];
+  sampleUrl?: string;
   pageSize?: number;
   selectedColumns?: string[];
   fitBoundsOnLoad?: boolean;
   allowLocalFiles?: boolean;
   allowRemoteUrls?: boolean;
   pickable?: boolean;
+  layerName?: string;
+  beforeId?: string;
+  interleaved?: boolean;
 }
 
 export interface GeoParquetControlReactProps extends GeoParquetControlOptions {

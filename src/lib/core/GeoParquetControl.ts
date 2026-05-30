@@ -38,7 +38,12 @@ import type {
   GeoParquetState,
 } from './types';
 
-const DEFAULT_OPTIONS: Required<Omit<GeoParquetControlOptions, 'sourceUrl' | 'sourceUrls' | 'selectedColumns'>> = {
+const DEFAULT_OPTIONS: Required<
+    Omit<
+      GeoParquetControlOptions,
+      'sourceUrl' | 'sourceUrls' | 'sampleUrl' | 'selectedColumns' | 'layerName' | 'beforeId'
+    >
+> = {
   collapsed: true,
   position: 'top-right',
   title: DEFAULT_TITLE,
@@ -49,12 +54,15 @@ const DEFAULT_OPTIONS: Required<Omit<GeoParquetControlOptions, 'sourceUrl' | 'so
   allowLocalFiles: true,
   allowRemoteUrls: true,
   pickable: true,
+  interleaved: true,
 };
 
 type EventHandlersMap = globalThis.Map<GeoParquetControlEvent, Set<GeoParquetControlEventHandler>>;
 
 interface LoadedGeoParquetLayer {
   id: string;
+  name: string;
+  beforeId: string | null;
   source: string;
   displaySource: string;
   localFileName: string | null;
@@ -83,8 +91,16 @@ export class GeoParquetControl implements IControl {
   private content?: HTMLElement;
   private renderer?: GeoParquetRenderer;
   private popup: maplibregl.Popup | null = null;
-  private options: Required<Omit<GeoParquetControlOptions, 'sourceUrl' | 'sourceUrls' | 'selectedColumns'>> &
-    Pick<GeoParquetControlOptions, 'sourceUrl' | 'sourceUrls' | 'selectedColumns'>;
+  private options: Required<
+    Omit<
+      GeoParquetControlOptions,
+      'sourceUrl' | 'sourceUrls' | 'sampleUrl' | 'selectedColumns' | 'layerName' | 'beforeId'
+    >
+  > &
+    Pick<
+      GeoParquetControlOptions,
+      'sourceUrl' | 'sourceUrls' | 'sampleUrl' | 'selectedColumns' | 'layerName' | 'beforeId'
+    >;
   private eventHandlers: EventHandlersMap = new globalThis.Map();
   private resizeHandler: (() => void) | null = null;
   private mapResizeHandler: (() => void) | null = null;
@@ -98,11 +114,15 @@ export class GeoParquetControl implements IControl {
   private error: string | null = null;
   private selectedFeature: GeoParquetFeatureSelection | null = null;
   private pickable: boolean;
+  private nextLayerName = '';
+  private nextBeforeId = '';
 
   constructor(options?: Partial<GeoParquetControlOptions>) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.collapsed = this.options.collapsed;
     this.pickable = this.options.pickable;
+    this.nextLayerName = this.options.layerName ?? '';
+    this.nextBeforeId = this.options.beforeId ?? '';
   }
 
   onAdd(map: MapLibreMap): HTMLElement {
@@ -114,6 +134,7 @@ export class GeoParquetControl implements IControl {
     this.mapContainer.appendChild(this.panel);
     this.renderer = new GeoParquetRenderer(map, {
       onSelect: (selection) => this.handleMapSelect(selection),
+      interleaved: this.options.interleaved,
     });
     this.renderer.setPickable(this.pickable);
     this.setupEventListeners();
@@ -256,6 +277,8 @@ export class GeoParquetControl implements IControl {
         source: resolvedUrl,
         displaySource: resolvedUrl,
         localFileName: null,
+        layerName: this.consumeLayerName(resolvedUrl),
+        beforeId: this.nextBeforeId.trim() || null,
         warnings,
       });
     }
@@ -282,6 +305,8 @@ export class GeoParquetControl implements IControl {
           source: fileName,
           displaySource: file.name,
           localFileName: fileName,
+          layerName: this.consumeLayerName(file.name),
+          beforeId: this.nextBeforeId.trim() || null,
           warnings: [],
         });
       } catch (error) {
@@ -313,7 +338,9 @@ export class GeoParquetControl implements IControl {
     if (!layer) return;
     if (layer.localFileName) dropFile(layer.localFileName).catch(() => {});
     this.layers = this.layers.filter((item) => item.id !== layerId);
-    if (this.activeLayerId === layerId) this.activeLayerId = this.layers.at(-1)?.id ?? null;
+    if (this.activeLayerId === layerId) {
+      this.activeLayerId = this.layers.length ? this.layers[this.layers.length - 1].id : null;
+    }
     if (this.selectedFeature?.layerId === layerId) {
       this.selectedFeature = null;
       this.popup?.remove();
@@ -361,11 +388,15 @@ export class GeoParquetControl implements IControl {
     source,
     displaySource,
     localFileName,
+    layerName,
+    beforeId,
     warnings,
   }: {
     source: string;
     displaySource: string;
     localFileName: string | null;
+    layerName: string;
+    beforeId: string | null;
     warnings: FileHealthWarning[];
   }): Promise<void> {
     try {
@@ -380,6 +411,8 @@ export class GeoParquetControl implements IControl {
           : [];
       const layer: LoadedGeoParquetLayer = {
         id: this.createLayerId(),
+        name: layerName,
+        beforeId,
         source,
         displaySource,
         localFileName,
@@ -543,7 +576,7 @@ export class GeoParquetControl implements IControl {
     this.activeLayerId = layer.id;
     this.selectedFeature = {
       layerId: layer.id,
-      layerName: layer.displaySource,
+      layerName: layer.name,
       index: selection.index,
       properties: layer.rows[selection.index] ?? { __index: selection.index },
     };
@@ -563,7 +596,12 @@ export class GeoParquetControl implements IControl {
       .map(([key, value]) => `<tr><th>${this.escapeHtml(key)}</th><td>${this.escapeHtml(String(value ?? ''))}</td></tr>`)
       .join('');
     this.popup?.remove();
-    this.popup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: '320px' })
+    this.popup = new maplibregl.Popup({
+      className: 'geoparquet-attribute-popup',
+      closeButton: true,
+      closeOnClick: false,
+      maxWidth: '320px',
+    })
       .setLngLat(coordinate)
       .setHTML(
         `<div class="geoparquet-popup"><strong>${this.escapeHtml(
@@ -589,7 +627,14 @@ export class GeoParquetControl implements IControl {
   private renderAllLayers(): void {
     this.renderer?.setPickable(this.pickable);
     this.renderer?.setSelectedFeature(this.selectedFeature?.layerId ?? null, this.selectedFeature?.index ?? null);
-    this.renderer?.setData(this.layers.map((layer) => ({ id: layer.id, results: layer.geoArrowResults })));
+    this.renderer?.setData(
+      this.layers.map((layer) => ({
+        id: layer.id,
+        name: layer.name,
+        beforeId: layer.beforeId,
+        results: layer.geoArrowResults,
+      }))
+    );
   }
 
   private getActiveLayer(): LoadedGeoParquetLayer | null {
@@ -610,6 +655,8 @@ export class GeoParquetControl implements IControl {
   private toLayerState(layer: LoadedGeoParquetLayer): GeoParquetLayerState {
     return {
       id: layer.id,
+      name: layer.name,
+      beforeId: layer.beforeId,
       source: layer.source,
       displaySource: layer.displaySource,
       schema: [...layer.schema],
@@ -816,12 +863,14 @@ export class GeoParquetControl implements IControl {
       input.className = 'geoparquet-control-input';
       input.type = 'text';
       input.placeholder = 'Paste one or more URLs';
+      input.value = this.options.sampleUrl ?? '';
       const button = document.createElement('button');
       button.className = 'geoparquet-control-button';
       button.type = 'button';
       button.textContent = 'Add';
       button.disabled = this.loading;
-      button.addEventListener('click', () => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
         const urls = this.parseUrlList(input.value);
         if (urls.length > 0) {
           this.loadUrls(urls).catch(() => {});
@@ -833,6 +882,36 @@ export class GeoParquetControl implements IControl {
       section.appendChild(label);
       section.appendChild(row);
     }
+
+    const layerFields = document.createElement('div');
+    layerFields.className = 'geoparquet-control-grid';
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'geoparquet-control-label';
+    nameLabel.textContent = 'Layer name';
+    const nameInput = document.createElement('input');
+    nameInput.className = 'geoparquet-control-input';
+    nameInput.type = 'text';
+    nameInput.placeholder = 'Auto';
+    nameInput.value = this.nextLayerName;
+    nameInput.addEventListener('input', () => {
+      this.nextLayerName = nameInput.value;
+    });
+    const beforeLabel = document.createElement('label');
+    beforeLabel.className = 'geoparquet-control-label';
+    beforeLabel.textContent = 'before_id';
+    const beforeInput = document.createElement('input');
+    beforeInput.className = 'geoparquet-control-input';
+    beforeInput.type = 'text';
+    beforeInput.placeholder = 'Map layer id';
+    beforeInput.value = this.nextBeforeId;
+    beforeInput.addEventListener('input', () => {
+      this.nextBeforeId = beforeInput.value;
+    });
+    nameLabel.appendChild(nameInput);
+    beforeLabel.appendChild(beforeInput);
+    layerFields.appendChild(nameLabel);
+    layerFields.appendChild(beforeLabel);
+    section.appendChild(layerFields);
 
     if (this.options.allowLocalFiles) {
       const fileInput = document.createElement('input');
@@ -931,7 +1010,7 @@ export class GeoParquetControl implements IControl {
         this.emit('statechange');
       });
       const text = document.createElement('span');
-      text.textContent = layer.displaySource;
+      text.textContent = layer.name;
       label.appendChild(radio);
       label.appendChild(text);
 
@@ -954,7 +1033,9 @@ export class GeoParquetControl implements IControl {
     const section = document.createElement('div');
     section.className = 'geoparquet-control-section geoparquet-control-summary';
     const items: [string, string][] = [
+      ['Layer', layer.name],
       ['Source', layer.displaySource],
+      ['before_id', layer.beforeId ?? ''],
       ['Rows', layer.totalRows >= 0 ? layer.totalRows.toLocaleString() : 'Unknown'],
       ['Loaded', Object.keys(layer.rows).length.toLocaleString()],
       ['Geometry', layer.primaryGeoColumn ?? 'Not detected'],
@@ -970,6 +1051,44 @@ export class GeoParquetControl implements IControl {
       row.appendChild(val);
       section.appendChild(row);
     });
+    const controls = document.createElement('div');
+    controls.className = 'geoparquet-control-grid';
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'geoparquet-control-label';
+    nameLabel.textContent = 'Layer name';
+    const nameInput = document.createElement('input');
+    nameInput.className = 'geoparquet-control-input';
+    nameInput.type = 'text';
+    nameInput.value = layer.name;
+    nameInput.disabled = this.loading;
+    nameInput.addEventListener('change', () => {
+      layer.name = nameInput.value.trim() || this.displayNameFromSource(layer.displaySource);
+      if (this.selectedFeature?.layerId === layer.id) {
+        this.selectedFeature.layerName = layer.name;
+      }
+      this.renderContent();
+      this.emit('statechange');
+    });
+    const beforeLabel = document.createElement('label');
+    beforeLabel.className = 'geoparquet-control-label';
+    beforeLabel.textContent = 'before_id';
+    const beforeInput = document.createElement('input');
+    beforeInput.className = 'geoparquet-control-input';
+    beforeInput.type = 'text';
+    beforeInput.placeholder = 'Map layer id';
+    beforeInput.value = layer.beforeId ?? '';
+    beforeInput.disabled = this.loading;
+    beforeInput.addEventListener('change', () => {
+      layer.beforeId = beforeInput.value.trim() || null;
+      this.renderAllLayers();
+      this.renderContent();
+      this.emit('statechange');
+    });
+    nameLabel.appendChild(nameInput);
+    beforeLabel.appendChild(beforeInput);
+    controls.appendChild(nameLabel);
+    controls.appendChild(beforeLabel);
+    section.appendChild(controls);
     return section;
   }
 
@@ -1096,6 +1215,13 @@ export class GeoParquetControl implements IControl {
 
   private displayNameFromSource(source: string): string {
     return source.split(/[\\/]/).pop() || source;
+  }
+
+  private consumeLayerName(source: string): string {
+    const layerName = this.nextLayerName.trim();
+    if (!layerName) return this.displayNameFromSource(source);
+    this.nextLayerName = '';
+    return layerName;
   }
 
   private parseUrlList(value: string): string[] {

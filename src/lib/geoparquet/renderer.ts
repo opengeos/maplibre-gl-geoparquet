@@ -22,6 +22,8 @@ type DeckInfo = {
 
 export interface GeoParquetRenderedLayer {
   id: string;
+  name: string;
+  beforeId: string | null;
   results: GeoArrowResult[];
 }
 
@@ -33,6 +35,7 @@ export interface GeoParquetPickInfo {
 
 export interface GeoParquetRendererOptions {
   onSelect: (selection: GeoParquetPickInfo | null) => void;
+  interleaved?: boolean;
 }
 
 export class GeoParquetRenderer {
@@ -42,11 +45,12 @@ export class GeoParquetRenderer {
   private selectedIndex: number | null = null;
   private pickable = true;
   private onSelect: (selection: GeoParquetPickInfo | null) => void;
+  private currentLayers: GeoParquetRenderedLayer[] = [];
 
   constructor(map: MapLibreMap, options: GeoParquetRendererOptions) {
     this.map = map;
     this.onSelect = options.onSelect;
-    this.overlay = new MapboxOverlay({ layers: [], interleaved: false });
+    this.overlay = new MapboxOverlay({ layers: [], interleaved: options.interleaved ?? true });
     this.map.addControl(this.overlay);
   }
 
@@ -60,6 +64,7 @@ export class GeoParquetRenderer {
   }
 
   setData(layers: GeoParquetRenderedLayer[]): void {
+    this.currentLayers = layers;
     const deckLayers = layers.flatMap((layer) =>
       layer.results.flatMap((result, index) => this.createLayers(layer.id, result, index))
     );
@@ -125,6 +130,7 @@ export class GeoParquetRenderer {
       return [
         new GeoArrowScatterplotLayer({
           id: layerKey,
+          beforeId: this.getLayerBeforeId(layerId),
           data: result.table,
           getFillColor: (objectInfo: { index: number }) =>
             isSelected(objectInfo) ? SELECTED_FILL : NORMAL_FILL,
@@ -149,6 +155,7 @@ export class GeoParquetRenderer {
       return [
         new GeoArrowPathLayer({
           id: layerKey,
+          beforeId: this.getLayerBeforeId(layerId),
           data: result.table,
           getColor: (objectInfo: { index: number }) => (isSelected(objectInfo) ? SELECTED_LINE : NORMAL_LINE),
           getWidth: 2.5,
@@ -170,6 +177,7 @@ export class GeoParquetRenderer {
     return [
       new GeoArrowPolygonLayer({
         id: layerKey,
+        beforeId: this.getLayerBeforeId(layerId),
         data: result.table,
         getFillColor: (objectInfo: { index: number }) =>
           isSelected(objectInfo) ? SELECTED_FILL : NORMAL_FILL,
@@ -189,5 +197,9 @@ export class GeoParquetRenderer {
         },
       }),
     ];
+  }
+
+  private getLayerBeforeId(layerId: string): string | undefined {
+    return this.currentLayers.find((layer) => layer.id === layerId)?.beforeId ?? undefined;
   }
 }

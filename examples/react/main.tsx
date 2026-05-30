@@ -47,7 +47,7 @@ function App() {
           title="GeoParquet"
           collapsed={state.collapsed}
           panelWidth={360}
-          sourceUrl={sampleUrl}
+          sampleUrl={sampleUrl}
           onStateChange={setState}
           onError={(error) => console.error(error)}
         />

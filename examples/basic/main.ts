@@ -20,7 +20,7 @@ map.on('load', () => {
     title: 'GeoParquet',
     collapsed: false,
     panelWidth: 360,
-    sourceUrl: sampleUrl,
+    sampleUrl,
   });
 
   control.on('load', (event) => {

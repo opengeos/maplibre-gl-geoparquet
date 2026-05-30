@@ -137,6 +137,12 @@
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.geoparquet-control-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .geoparquet-control-input,
 .geoparquet-control-file {
   border: 1px solid #d1d5db;
@@ -348,6 +354,18 @@
   font: 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
+.maplibregl-popup.geoparquet-attribute-popup,
+.maplibregl-popup.geoparquet-attribute-popup.maplibregl-popup {
+  max-width: min(320px, calc(100vw - 24px)) !important;
+  z-index: 10000;
+}
+
+.maplibregl-popup.geoparquet-attribute-popup .maplibregl-popup-content {
+  box-sizing: border-box;
+  max-width: min(320px, calc(100vw - 24px));
+  overflow: hidden;
+}
+
 .geoparquet-popup strong {
   display: block;
   margin-bottom: 6px;
@@ -356,18 +374,24 @@
 
 .geoparquet-popup table {
   border-collapse: collapse;
-  max-width: 280px;
+  max-width: 100%;
+  table-layout: fixed;
+  width: 100%;
 }
 
 .geoparquet-popup th,
 .geoparquet-popup td {
   border-top: 1px solid #e5e7eb;
+  max-width: 0;
+  overflow-wrap: anywhere;
   padding: 3px 5px;
   text-align: left;
   vertical-align: top;
+  word-break: break-word;
 }
 
 .geoparquet-popup th {
   color: #6b7280;
   font-weight: 600;
+  width: 34%;
 }
