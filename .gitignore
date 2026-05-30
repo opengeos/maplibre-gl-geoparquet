@@ -36,3 +36,6 @@ dist-examples/
 .env.local
 .env.*.local
 .vite/
+
+# DuckDB extensions are downloaded during build
+extensions/*.wasm

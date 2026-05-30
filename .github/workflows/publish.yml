@@ -17,6 +17,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Load DuckDB extensions
+        run: npm run load-extensions
+
       - name: Run tests
         run: npm test
 

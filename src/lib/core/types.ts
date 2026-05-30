@@ -1,80 +1,118 @@
 import type { Map } from 'maplibre-gl';
+import type { GeoArrowResult } from '@walkthru-earth/objex-utils';
 
-/**
- * Options for configuring the PluginControl
- */
-export interface PluginControlOptions {
-  /**
-   * Whether the control panel should start collapsed (showing only the toggle button)
-   * @default true
-   */
-  collapsed?: boolean;
+export type GeoParquetControlPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
-  /**
-   * Position of the control on the map
-   * @default 'top-right'
-   */
-  position?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
-
-  /**
-   * Title displayed in the control header
-   * @default 'Plugin Control'
-   */
-  title?: string;
-
-  /**
-   * Width of the control panel in pixels
-   * @default 300
-   */
-  panelWidth?: number;
-
-  /**
-   * Custom CSS class name for the control container
-   */
-  className?: string;
+export interface GeoParquetColumn {
+  name: string;
+  type: string;
+  nullable: boolean;
 }
 
-/**
- * Internal state of the plugin control
- */
-export interface PluginState {
-  /**
-   * Whether the control panel is currently collapsed
-   */
+export interface GeoParquetGeoMetadata {
+  version?: string;
+  primary_column?: string;
+  columns?: Record<string, GeoParquetGeoColumnMetadata>;
+}
+
+export interface GeoParquetGeoColumnMetadata {
+  encoding?: string;
+  geometry_types?: string[];
+  bbox?: [number, number, number, number];
+  crs?: Record<string, unknown> | null;
+  covering?: {
+    bbox?: GeoParquetBboxCovering;
+  };
+}
+
+export interface GeoParquetBboxCovering {
+  xmin: string[];
+  ymin: string[];
+  xmax: string[];
+  ymax: string[];
+}
+
+export interface GeoParquetMetadata {
+  schema: GeoParquetColumn[];
+  totalRows: number;
+  rowGroupSize: number | null;
+  geoMetadata: GeoParquetGeoMetadata | null;
+  fileInfo: Record<string, unknown> | null;
+  kvMetadata: Record<string, unknown> | null;
+}
+
+export interface GeoParquetFeatureSelection {
+  index: number;
+  properties: Record<string, unknown>;
+}
+
+export interface GeoParquetState {
   collapsed: boolean;
-
-  /**
-   * Current panel width in pixels
-   */
   panelWidth: number;
-
-  /**
-   * Any custom state data
-   */
-  data?: Record<string, unknown>;
+  source: string | null;
+  displaySource: string;
+  loading: boolean;
+  statusMessage: string;
+  error: string | null;
+  schema: GeoParquetColumn[];
+  selectedColumns: string[] | null;
+  pageSize: number;
+  totalRows: number;
+  loadedRows: number;
+  hasMore: boolean;
+  primaryGeoColumn: string | null;
+  selectedFeature: GeoParquetFeatureSelection | null;
+  metadata: GeoParquetMetadata | null;
 }
 
-/**
- * Props for the React wrapper component
- */
-export interface PluginControlReactProps extends PluginControlOptions {
-  /**
-   * MapLibre GL map instance
-   */
+export interface GeoParquetControlOptions {
+  collapsed?: boolean;
+  position?: GeoParquetControlPosition;
+  title?: string;
+  panelWidth?: number;
+  className?: string;
+  sourceUrl?: string;
+  pageSize?: number;
+  selectedColumns?: string[];
+  fitBoundsOnLoad?: boolean;
+  allowLocalFiles?: boolean;
+  allowRemoteUrls?: boolean;
+}
+
+export interface GeoParquetControlReactProps extends GeoParquetControlOptions {
   map: Map;
-
-  /**
-   * Callback fired when the control state changes
-   */
-  onStateChange?: (state: PluginState) => void;
+  onStateChange?: (state: GeoParquetState) => void;
+  onLoad?: (state: GeoParquetState) => void;
+  onError?: (error: Error, state: GeoParquetState) => void;
+  onSelect?: (selection: GeoParquetFeatureSelection | null, state: GeoParquetState) => void;
 }
 
-/**
- * Event types emitted by the plugin control
- */
-export type PluginControlEvent = 'collapse' | 'expand' | 'statechange';
+export type GeoParquetControlEvent =
+  | 'collapse'
+  | 'expand'
+  | 'statechange'
+  | 'loadstart'
+  | 'progress'
+  | 'load'
+  | 'error'
+  | 'select';
 
-/**
- * Event handler function type
- */
-export type PluginControlEventHandler = (event: { type: PluginControlEvent; state: PluginState }) => void;
+export interface GeoParquetControlEventData {
+  type: GeoParquetControlEvent;
+  state: GeoParquetState;
+  error?: Error;
+  selection?: GeoParquetFeatureSelection | null;
+}
+
+export type GeoParquetControlEventHandler = (event: GeoParquetControlEventData) => void;
+
+export interface LoadedGeoArrowData {
+  results: GeoArrowResult[];
+  wkbByIndex: Record<number, Uint8Array>;
+}
+
+export type PluginControlOptions = GeoParquetControlOptions;
+export type PluginState = GeoParquetState;
+export type PluginControlReactProps = GeoParquetControlReactProps;
+export type PluginControlEvent = GeoParquetControlEvent;
+export type PluginControlEventHandler = GeoParquetControlEventHandler;

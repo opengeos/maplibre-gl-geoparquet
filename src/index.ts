@@ -2,10 +2,17 @@
 import './lib/styles/plugin-control.css';
 
 // Main entry point - Core exports
-export { PluginControl } from './lib/core/PluginControl';
+export { GeoParquetControl, PluginControl } from './lib/core/GeoParquetControl';
 
 // Type exports
 export type {
+  GeoParquetControlOptions,
+  GeoParquetState,
+  GeoParquetControlEvent,
+  GeoParquetControlEventHandler,
+  GeoParquetColumn,
+  GeoParquetMetadata,
+  GeoParquetFeatureSelection,
   PluginControlOptions,
   PluginState,
   PluginControlEvent,
@@ -21,3 +28,15 @@ export {
   throttle,
   classNames,
 } from './lib/utils';
+
+export {
+  escapeSource,
+  quoteIdentifier,
+  detectPrimaryGeoColumn,
+  needsReprojection,
+  getSourceCrsString,
+  getBboxCovering,
+  buildWhereClause,
+  buildFilterCondition,
+  friendlyError,
+} from './lib/geoparquet/utils';

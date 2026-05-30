@@ -1,11 +1,17 @@
 // React entry point
-export { PluginControlReact } from './lib/core/PluginControlReact';
+export { GeoParquetControlReact, PluginControlReact } from './lib/core/GeoParquetControlReact';
 
 // React hooks
-export { usePluginState } from './lib/hooks';
+export { useGeoParquetState, usePluginState } from './lib/hooks';
 
 // Re-export types for React consumers
 export type {
+  GeoParquetControlOptions,
+  GeoParquetState,
+  GeoParquetControlReactProps,
+  GeoParquetControlEvent,
+  GeoParquetControlEventHandler,
+  GeoParquetFeatureSelection,
   PluginControlOptions,
   PluginState,
   PluginControlReactProps,

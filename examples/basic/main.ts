@@ -1,9 +1,11 @@
 import maplibregl from 'maplibre-gl';
-import { PluginControl } from '../../src/index';
+import { GeoParquetControl } from '../../src/index';
 import '../../src/index.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-// Create map
+const sampleUrl =
+  'https://raw.githubusercontent.com/opengeospatial/geoparquet/main/examples/example.parquet';
+
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://demotiles.maplibre.org/style.json',
@@ -11,40 +13,25 @@ const map = new maplibregl.Map({
   zoom: 2,
 });
 
-// Add navigation controls to top-right
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-// Add fullscreen control to top-right (after navigation)
-map.addControl(new maplibregl.FullscreenControl(), 'top-right');
-
-// Add plugin control when map loads
 map.on('load', () => {
-  // Create the plugin control with custom options
-  // Set collapsed: true to start with just the 29x29 button (like navigation control)
-  const pluginControl = new PluginControl({
-    title: 'My Plugin',
+  const control = new GeoParquetControl({
+    title: 'GeoParquet',
     collapsed: false,
-    panelWidth: 300,
+    panelWidth: 360,
+    sourceUrl: sampleUrl,
   });
 
-  // Add control to the map
-  map.addControl(pluginControl, 'top-right');
-
-  // Add Globe control to the map
-  map.addControl(new maplibregl.GlobeControl(), 'top-right');
-
-  // Listen for state changes
-  pluginControl.on('statechange', (event) => {
-    console.log('Plugin state changed:', event.state);
+  control.on('load', (event) => {
+    console.log('GeoParquet loaded:', event.state);
+  });
+  control.on('error', (event) => {
+    console.error('GeoParquet error:', event.error);
+  });
+  control.on('select', (event) => {
+    console.log('Selected feature:', event.selection);
   });
 
-  pluginControl.on('collapse', () => {
-    console.log('Plugin panel collapsed');
-  });
-
-  pluginControl.on('expand', () => {
-    console.log('Plugin panel expanded');
-  });
-
-  console.log('Plugin control added to map');
+  map.addControl(control, 'top-right');
 });
