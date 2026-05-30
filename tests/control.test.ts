@@ -86,4 +86,23 @@ describe('GeoParquetControl', () => {
     expect(mapContainer.querySelector('.geoparquet-control-panel')).toBeNull();
     expect(container.parentNode).toBeNull();
   });
+
+  it('renders pickable toggle and allows multiple local files', () => {
+    const { map, mapContainer } = createMapStub();
+    const control = new GeoParquetControl({ pickable: false, collapsed: false });
+
+    control.onAdd(map as never);
+
+    const fileInput = mapContainer.querySelector<HTMLInputElement>('.geoparquet-control-file');
+    const pickableInput = mapContainer.querySelector<HTMLInputElement>(
+      '.geoparquet-control-check input[type="checkbox"]'
+    );
+
+    expect(fileInput?.multiple).toBe(true);
+    expect(pickableInput?.checked).toBe(false);
+
+    control.setPickable(true);
+
+    expect(control.getState().pickable).toBe(true);
+  });
 });

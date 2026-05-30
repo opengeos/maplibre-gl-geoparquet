@@ -10,9 +10,11 @@ or manage the map basemap.
 
 - MapLibre `IControl` implementation with a compact collapsible button
 - Remote URL and local file loading
+- Multiple GeoParquet files loaded as separate map layers
 - GeoParquet metadata inspection
 - Column selection and page size controls
 - Interactive point, line, and polygon rendering with deck.gl
+- Optional feature picking with attribute popups
 - CRS reprojection to WGS84 when GeoParquet metadata provides a non-WGS84 CRS
 - Viewport reload when GeoParquet bbox covering metadata is available
 - TypeScript and React entry points
@@ -44,7 +46,11 @@ map.on('load', () => {
     new GeoParquetControl({
       title: 'GeoParquet',
       collapsed: false,
-      sourceUrl: 'https://example.com/data.parquet',
+      sourceUrls: [
+        'https://example.com/roads.parquet',
+        'https://example.com/buildings.parquet',
+      ],
+      pickable: true,
     }),
     'top-right'
   );
@@ -64,7 +70,11 @@ function GeoParquetLayer({ map }) {
     <GeoParquetControlReact
       map={map}
       title="GeoParquet"
-      sourceUrl="https://example.com/data.parquet"
+      sourceUrls={[
+        'https://example.com/roads.parquet',
+        'https://example.com/buildings.parquet',
+      ]}
+      pickable
       onStateChange={setState}
     />
   );
@@ -83,19 +93,25 @@ function GeoParquetLayer({ map }) {
 | `panelWidth` | `number` | `340` | Floating panel width in pixels |
 | `className` | `string` | `''` | Extra class on the control button container |
 | `sourceUrl` | `string` | `undefined` | Remote GeoParquet URL to load on add |
+| `sourceUrls` | `string[]` | `undefined` | Multiple remote GeoParquet URLs to load on add |
 | `pageSize` | `number` | `10000` | Rows loaded per query |
 | `selectedColumns` | `string[]` | `null` | Attribute columns to load |
 | `fitBoundsOnLoad` | `boolean` | `true` | Fit the map to loaded data |
 | `allowLocalFiles` | `boolean` | `true` | Enable local file input |
 | `allowRemoteUrls` | `boolean` | `true` | Enable remote URL input |
+| `pickable` | `boolean` | `true` | Enable feature clicking and attribute popups |
 
 ### Methods
 
 - `loadUrl(url: string): Promise<void>`
+- `loadUrls(urls: string[]): Promise<void>`
 - `loadFile(file: File): Promise<void>`
+- `loadFiles(files: File[]): Promise<void>`
 - `clear(): void`
-- `loadMore(): Promise<void>`
-- `reloadViewport(): Promise<void>`
+- `removeLayer(layerId: string): void`
+- `loadMore(layerId?: string): Promise<void>`
+- `reloadViewport(layerId?: string): Promise<void>`
+- `setPickable(pickable: boolean): void`
 - `getState(): GeoParquetState`
 - `on(event, handler): void`
 - `off(event, handler): void`
@@ -139,9 +155,8 @@ docker run -p 8080:80 maplibre-gl-geoparquet
 
 Open http://localhost:8080/maplibre-gl-geoparquet/.
 
-
 ## Acknowledgments
 
 This project is inspired by the work in
-[moregeo-it/geoparquet-viewer](https://github.com/moregeo-it/geoparquet-viewer/),
+[moregeo-it/geoparquet-viewer](https://github.com/moregeo-it/geoparquet-viewer),
 including its GeoParquet loading, metadata, and browser visualization workflows.

@@ -42,8 +42,24 @@ export interface GeoParquetMetadata {
 }
 
 export interface GeoParquetFeatureSelection {
+  layerId: string;
+  layerName: string;
   index: number;
   properties: Record<string, unknown>;
+}
+
+export interface GeoParquetLayerState {
+  id: string;
+  source: string;
+  displaySource: string;
+  schema: GeoParquetColumn[];
+  selectedColumns: string[] | null;
+  pageSize: number;
+  totalRows: number;
+  loadedRows: number;
+  hasMore: boolean;
+  primaryGeoColumn: string | null;
+  metadata: GeoParquetMetadata | null;
 }
 
 export interface GeoParquetState {
@@ -51,6 +67,8 @@ export interface GeoParquetState {
   panelWidth: number;
   source: string | null;
   displaySource: string;
+  layers: GeoParquetLayerState[];
+  activeLayerId: string | null;
   loading: boolean;
   statusMessage: string;
   error: string | null;
@@ -63,6 +81,7 @@ export interface GeoParquetState {
   primaryGeoColumn: string | null;
   selectedFeature: GeoParquetFeatureSelection | null;
   metadata: GeoParquetMetadata | null;
+  pickable: boolean;
 }
 
 export interface GeoParquetControlOptions {
@@ -72,11 +91,13 @@ export interface GeoParquetControlOptions {
   panelWidth?: number;
   className?: string;
   sourceUrl?: string;
+  sourceUrls?: string[];
   pageSize?: number;
   selectedColumns?: string[];
   fitBoundsOnLoad?: boolean;
   allowLocalFiles?: boolean;
   allowRemoteUrls?: boolean;
+  pickable?: boolean;
 }
 
 export interface GeoParquetControlReactProps extends GeoParquetControlOptions {
