@@ -1,1 +1,1 @@
-export { usePluginState } from './usePluginState';
+export { useGeoParquetState, usePluginState } from './useGeoParquetState';

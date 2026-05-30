@@ -1,222 +1,308 @@
-/**
- * MapLibre GL Plugin Control Styles
- *
- * This stylesheet provides the base styles for the plugin control.
- * Customize these styles to match your plugin's design.
- */
-
-/* Container - matches maplibregl-ctrl styling */
-.plugin-control {
+.geoparquet-control {
   background: #fff;
   border-radius: 4px;
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+  color: #1f2933;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-/* Toggle button - 29x29 to match navigation control */
-.plugin-control-toggle {
+.geoparquet-control-toggle {
+  align-items: center;
   background: none;
   border: none;
+  color: #1f2933;
+  cursor: pointer;
+  display: flex;
+  height: 29px;
+  justify-content: center;
+  outline: none;
   padding: 0;
   width: 29px;
-  height: 29px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  outline: none;
-  color: #1f2a37;
 }
 
-.plugin-control-toggle:hover {
+.geoparquet-control-toggle:hover {
   background-color: rgba(0, 0, 0, 0.05);
 }
 
-.plugin-control-toggle .plugin-control-icon {
-  width: 100%;
-  height: 100%;
-  position: relative;
-  display: flex;
+.geoparquet-control-icon {
   align-items: center;
+  display: flex;
+  height: 100%;
   justify-content: center;
   line-height: 0;
+  width: 100%;
 }
 
-.plugin-control-toggle .plugin-control-icon svg {
-  width: 22px;
-  height: 22px;
+.geoparquet-control-icon svg {
   display: block;
-  stroke: currentColor;
   fill: none;
+  height: 22px;
+  stroke: currentColor;
+  width: 22px;
 }
 
-/* Panel - positioned dynamically by JavaScript for floating behavior */
-.plugin-control-panel {
-  position: absolute;
-  /* Position is set dynamically by _updatePanelPosition() */
+.geoparquet-control-panel {
   background: #fff;
   border-radius: 4px;
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
-  min-width: 240px;
-  max-width: 420px;
-  max-height: 500px;
-  overflow-y: auto;
-  z-index: 1000;
-  padding: 8px;
+  display: none;
   font-size: 12px;
   line-height: 1.4;
-  display: none;
+  max-height: min(560px, calc(100% - 20px));
+  max-width: min(420px, calc(100% - 20px));
+  min-width: 280px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  z-index: 1000;
 }
 
-.plugin-control-panel.expanded {
+.geoparquet-control-panel.expanded {
   display: block;
 }
 
-/* Panel header */
-.plugin-control-header {
-  display: flex;
+.geoparquet-control-header {
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
   font-weight: 600;
-  color: #333;
-  padding: 4px 0 8px 0;
-  border-bottom: 1px solid #e0e0e0;
-  margin-bottom: 8px;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 10px 12px;
 }
 
-.plugin-control-title {
+.geoparquet-control-title {
   flex: 1 1 auto;
   font-size: 13px;
 }
 
-.plugin-control-close {
-  width: 20px;
-  height: 20px;
-  border: none;
+.geoparquet-control-close {
+  align-items: center;
   background: transparent;
-  color: #999;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  display: flex;
   font-size: 18px;
+  height: 22px;
+  justify-content: center;
   line-height: 1;
-  cursor: pointer;
   padding: 0;
-  transition: color 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 22px;
 }
 
-.plugin-control-close:hover {
-  color: #333;
+.geoparquet-control-close:hover {
+  color: #111827;
 }
 
-/* Content */
-.plugin-control-content {
-  max-height: 400px;
+.geoparquet-control-content {
+  max-height: 500px;
   overflow-y: auto;
+  padding: 10px 12px 12px;
 }
 
-.plugin-control-placeholder {
-  margin: 0;
-  color: #888;
-  font-size: 12px;
-  text-align: center;
-  padding: 16px 0;
-}
-
-/* Scrollbar styling */
-.plugin-control-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.plugin-control-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.plugin-control-content::-webkit-scrollbar-thumb {
-  background: #ccc;
-  border-radius: 3px;
-}
-
-.plugin-control-content::-webkit-scrollbar-thumb:hover {
-  background: #aaa;
-}
-
-/* Form elements */
-.plugin-control-group {
-  margin-bottom: 12px;
-}
-
-.plugin-control-group:last-child {
-  margin-bottom: 0;
-}
-
-.plugin-control-label {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #555;
-}
-
-.plugin-control-input {
-  width: 100%;
-  padding: 8px 10px;
-  font-size: 14px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.plugin-control-input:focus {
-  border-color: #4a90d9;
-  box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
-}
-
-.plugin-control-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px 16px;
-  font-size: 14px;
-  font-weight: 500;
-  color: white;
-  background: #4a90d9;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.plugin-control-button:hover {
-  background: #3a7bc8;
-}
-
-.plugin-control-button:focus {
-  outline: 2px solid #4a90d9;
-  outline-offset: 2px;
-}
-
-.plugin-control-button:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
-
-/* Utility classes */
-.plugin-control-flex {
-  display: flex;
-  gap: 8px;
-}
-
-.plugin-control-flex-col {
+.geoparquet-control-section {
+  border-bottom: 1px solid #edf0f2;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 0 0 10px;
 }
 
-.plugin-control-divider {
-  height: 1px;
-  background: #e0e0e0;
-  margin: 12px 0;
+.geoparquet-control-section + .geoparquet-control-section {
+  padding-top: 10px;
+}
+
+.geoparquet-control-section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.geoparquet-control-section-title {
+  color: #111827;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.geoparquet-control-label {
+  color: #4b5563;
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.geoparquet-control-row {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.geoparquet-control-input,
+.geoparquet-control-file {
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  box-sizing: border-box;
+  font: inherit;
+  min-width: 0;
+  padding: 7px 8px;
+  width: 100%;
+}
+
+.geoparquet-control-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+  outline: none;
+}
+
+.geoparquet-control-button,
+.geoparquet-control-secondary-button {
+  align-items: center;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 600;
+  justify-content: center;
+  min-height: 32px;
+  padding: 7px 10px;
+}
+
+.geoparquet-control-button {
+  background: #2563eb;
+  color: #fff;
+}
+
+.geoparquet-control-button:hover {
+  background: #1d4ed8;
+}
+
+.geoparquet-control-secondary-button {
+  background: #eef2f7;
+  color: #1f2933;
+}
+
+.geoparquet-control-secondary-button:hover {
+  background: #e1e7ef;
+}
+
+.geoparquet-control-button:disabled,
+.geoparquet-control-secondary-button:disabled,
+.geoparquet-control-input:disabled,
+.geoparquet-control-file:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.geoparquet-control-placeholder,
+.geoparquet-control-status,
+.geoparquet-control-error,
+.geoparquet-control-warning {
+  border-radius: 4px;
+  margin: 0;
+  padding: 8px;
+}
+
+.geoparquet-control-placeholder {
+  color: #6b7280;
+  text-align: center;
+}
+
+.geoparquet-control-status {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.geoparquet-control-error {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.geoparquet-control-warning {
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.geoparquet-control-summary-row {
+  align-items: start;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.geoparquet-control-summary-row span {
+  color: #6b7280;
+}
+
+.geoparquet-control-summary-row strong {
+  color: #111827;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.geoparquet-control-column-list {
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  max-height: 136px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.geoparquet-control-check {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.geoparquet-control-check span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.geoparquet-control-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.geoparquet-control-actions .geoparquet-control-button:first-child {
+  grid-column: 1 / -1;
+}
+
+.geoparquet-control-properties {
+  display: grid;
+  gap: 4px 8px;
+  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+  margin: 0;
+}
+
+.geoparquet-control-properties dt {
+  color: #6b7280;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.geoparquet-control-properties dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.geoparquet-control-content::-webkit-scrollbar,
+.geoparquet-control-column-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.geoparquet-control-content::-webkit-scrollbar-track,
+.geoparquet-control-column-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.geoparquet-control-content::-webkit-scrollbar-thumb,
+.geoparquet-control-column-list::-webkit-scrollbar-thumb {
+  background: #c7ced8;
+  border-radius: 3px;
 }

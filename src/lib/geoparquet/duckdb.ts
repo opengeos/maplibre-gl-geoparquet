@@ -1,0 +1,287 @@
+import type { AsyncDuckDB, AsyncDuckDBConnection } from '@duckdb/duckdb-wasm';
+import type { Table } from 'apache-arrow';
+import duckdbWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
+import duckdbWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
+import parquetExtensionUrl from '../../../extensions/parquet.duckdb_extension.wasm?url';
+import httpfsExtensionUrl from '../../../extensions/httpfs.duckdb_extension.wasm?url';
+import spatialExtensionUrl from '../../../extensions/spatial.duckdb_extension.wasm?url';
+import type {
+  GeoParquetBboxCovering,
+  GeoParquetColumn,
+  GeoParquetGeoMetadata,
+  GeoParquetMetadata,
+} from '../core/types';
+import { buildWhereClause, escapeSource, quoteIdentifier, type GeoParquetFilter } from './utils';
+
+let database: AsyncDuckDB | null = null;
+let connection: AsyncDuckDBConnection | null = null;
+let initPromise: Promise<void> | null = null;
+let lastProgressMessage: string | null = null;
+const progressListeners = new Set<(message: string) => void>();
+const geometryTypeCache = new Map<string, Record<string, boolean>>();
+
+function emitProgress(message: string): void {
+  lastProgressMessage = message;
+  progressListeners.forEach((listener) => listener(message));
+}
+
+function absoluteAssetUrl(url: string): string {
+  return new URL(url, globalThis.location?.href ?? 'http://localhost/').href;
+}
+
+export async function initDB(onProgress?: (message: string) => void): Promise<void> {
+  if (database && connection) return;
+
+  if (onProgress) {
+    progressListeners.add(onProgress);
+    if (lastProgressMessage) onProgress(lastProgressMessage);
+  }
+
+  if (initPromise) {
+    await initPromise;
+    return;
+  }
+
+  initPromise = (async () => {
+    emitProgress('Loading DuckDB...');
+    const duckdb = await import('@duckdb/duckdb-wasm');
+    const worker = new Worker(duckdbWorkerUrl);
+    const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
+    database = new duckdb.AsyncDuckDB(logger, worker);
+
+    emitProgress('Starting DuckDB...');
+    await database.instantiate(duckdbWasmUrl);
+    await database.open({});
+
+    emitProgress('Opening database connection...');
+    connection = await database.connect();
+
+    emitProgress('Preloading coordinate systems...');
+    await connection.query('SELECT * FROM duckdb_coordinate_systems()');
+
+    const loadExtension = async (name: string, url: string) => {
+      emitProgress(`Loading ${name} extension...`);
+      await connection!.query(`LOAD '${absoluteAssetUrl(url).replace(/'/g, "''")}'`);
+    };
+
+    await loadExtension('parquet', parquetExtensionUrl);
+    await loadExtension('httpfs', httpfsExtensionUrl);
+    await loadExtension('spatial', spatialExtensionUrl);
+    progressListeners.clear();
+  })();
+
+  await initPromise;
+}
+
+export async function getDB(): Promise<AsyncDuckDB> {
+  if (!database) await initDB();
+  return database!;
+}
+
+export async function query(sql: string): Promise<Table> {
+  if (!connection) await initDB();
+  const result = await connection!.query(sql);
+  return result as unknown as Table;
+}
+
+export async function registerLocalFile(name: string, buffer: ArrayBuffer): Promise<void> {
+  const db = await getDB();
+  await db.registerFileBuffer(name, new Uint8Array(buffer));
+}
+
+export async function dropFile(name: string): Promise<void> {
+  const db = await getDB();
+  try {
+    await db.dropFile(name);
+  } catch {
+    // DuckDB throws when the file is already absent. That is harmless for cleanup.
+  }
+}
+
+export async function getSchema(source: string): Promise<GeoParquetColumn[]> {
+  const result = await query(`DESCRIBE SELECT * FROM read_parquet('${escapeSource(source)}')`);
+  return result.toArray().map((row) => ({
+    name: String(row.column_name),
+    type: String(row.column_type),
+    nullable: String(row.null) === 'YES',
+  }));
+}
+
+export function cacheSchemaGeomTypes(source: string, schema: GeoParquetColumn[]): void {
+  const entry: Record<string, boolean> = {};
+  schema.forEach((column) => {
+    entry[column.name] = column.type.toUpperCase().startsWith('GEOMETRY');
+  });
+  geometryTypeCache.set(source, entry);
+}
+
+export async function isGeometryType(source: string, geoColumn: string): Promise<boolean> {
+  const cached = geometryTypeCache.get(source);
+  if (cached && geoColumn in cached) return cached[geoColumn];
+  const schema = await getSchema(source);
+  cacheSchemaGeomTypes(source, schema);
+  return geometryTypeCache.get(source)?.[geoColumn] ?? false;
+}
+
+function blobToString(value: unknown): string {
+  if (value instanceof Uint8Array) return new TextDecoder().decode(value);
+  if (value instanceof ArrayBuffer) return new TextDecoder().decode(value);
+  if (ArrayBuffer.isView(value)) {
+    return new TextDecoder().decode(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  }
+  return String(value);
+}
+
+function geometryExpression(geoColumn: string, alreadyGeometry: boolean): string {
+  return alreadyGeometry ? quoteIdentifier(geoColumn) : `ST_GeomFromWKB(${quoteIdentifier(geoColumn)})`;
+}
+
+export async function bootstrapMetadata(
+  source: string,
+  onProgress: (message: string) => void = () => {}
+): Promise<GeoParquetMetadata> {
+  const escaped = escapeSource(source);
+
+  onProgress('Reading schema...');
+  const schema = await getSchema(source);
+  cacheSchemaGeomTypes(source, schema);
+
+  onProgress('Reading row group metadata...');
+  let rowGroupSize: number | null = null;
+  try {
+    const rowGroupResult = await query(
+      `SELECT FIRST(row_group_num_rows) AS first_rg_size FROM parquet_metadata('${escaped}') LIMIT 1`
+    );
+    const row = rowGroupResult.toArray()[0];
+    const value = Number(row.first_rg_size);
+    rowGroupSize = value > 0 ? value : null;
+  } catch {
+    rowGroupSize = null;
+  }
+
+  onProgress('Reading file metadata...');
+  let fileInfo: Record<string, unknown> | null = null;
+  let totalRows = -1;
+  try {
+    const fileResult = await query(`SELECT * FROM parquet_file_metadata('${escaped}')`);
+    const row = fileResult.toArray()[0];
+    fileInfo = {};
+    fileResult.schema.fields.forEach((field) => {
+      const value = row[field.name];
+      fileInfo![field.name] = typeof value === 'bigint' ? Number(value) : value;
+    });
+    totalRows = Number(fileInfo.num_rows ?? -1);
+  } catch {
+    const countResult = await query(`SELECT COUNT(*) AS cnt FROM read_parquet('${escaped}')`);
+    totalRows = Number(countResult.toArray()[0].cnt);
+  }
+
+  onProgress('Reading GeoParquet metadata...');
+  let kvMetadata: Record<string, unknown> | null = null;
+  let geoMetadata: GeoParquetGeoMetadata | null = null;
+  try {
+    const kvResult = await query(`SELECT key, value FROM parquet_kv_metadata('${escaped}')`);
+    kvMetadata = {};
+    kvResult.toArray().forEach((row) => {
+      const key = blobToString(row.key);
+      let value: unknown = blobToString(row.value);
+      try {
+        value = JSON.parse(String(value));
+      } catch {
+        // Keep non-JSON metadata as plain text.
+      }
+      kvMetadata![key] = value;
+    });
+    if (kvMetadata.geo && typeof kvMetadata.geo === 'object') {
+      geoMetadata = kvMetadata.geo as GeoParquetGeoMetadata;
+    }
+  } catch {
+    kvMetadata = null;
+    geoMetadata = null;
+  }
+
+  return { schema, totalRows, rowGroupSize, geoMetadata, fileInfo, kvMetadata };
+}
+
+export async function transformBbox(
+  bbox: [number, number, number, number],
+  sourceCrs: string,
+  targetCrs: string
+): Promise<[number, number, number, number]> {
+  const [west, south, east, north] = bbox;
+  const sourceLiteral = escapeSource(sourceCrs);
+  const targetLiteral = escapeSource(targetCrs);
+  const result = await query(
+    `SELECT ST_XMin(g) AS minx, ST_YMin(g) AS miny, ST_XMax(g) AS maxx, ST_YMax(g) AS maxy
+     FROM (SELECT ST_Transform(ST_MakeEnvelope(${west}, ${south}, ${east}, ${north}), '${sourceLiteral}', '${targetLiteral}', true) AS g)`
+  );
+  const row = result.toArray()[0];
+  return [Number(row.minx), Number(row.miny), Number(row.maxx), Number(row.maxy)];
+}
+
+export async function queryCount(
+  source: string,
+  filters: GeoParquetFilter[] = [],
+  bbox: [number, number, number, number] | null = null,
+  geoColumn: string | null = null,
+  sourceCrs: string | null = null,
+  bboxCovering: GeoParquetBboxCovering | null = null
+): Promise<number> {
+  const effectiveBbox =
+    bbox && bboxCovering && sourceCrs ? await transformBbox(bbox, 'EPSG:4326', sourceCrs) : bbox;
+  const where = buildWhereClause(filters, effectiveBbox, geoColumn, bboxCovering);
+  const result = await query(`SELECT COUNT(*) AS cnt FROM read_parquet('${escapeSource(source)}')${where}`);
+  return Number(result.toArray()[0].cnt);
+}
+
+export async function queryData(
+  source: string,
+  {
+    geoColumn = null,
+    filters = [],
+    bbox = null,
+    sourceCrs = null,
+    limit = null,
+    offset = 0,
+    alreadyGeometry = null,
+    columns = null,
+    bboxCovering = null,
+  }: {
+    geoColumn?: string | null;
+    filters?: GeoParquetFilter[];
+    bbox?: [number, number, number, number] | null;
+    sourceCrs?: string | null;
+    limit?: number | null;
+    offset?: number;
+    alreadyGeometry?: boolean | null;
+    columns?: string[] | null;
+    bboxCovering?: GeoParquetBboxCovering | null;
+  } = {}
+): Promise<Table> {
+  let isAlreadyGeometry = alreadyGeometry;
+  if (isAlreadyGeometry === null && geoColumn) {
+    isAlreadyGeometry = await isGeometryType(source, geoColumn);
+  }
+
+  const effectiveBbox =
+    bbox && bboxCovering && sourceCrs ? await transformBbox(bbox, 'EPSG:4326', sourceCrs) : bbox;
+  const where = buildWhereClause(filters, effectiveBbox, geoColumn, bboxCovering);
+
+  let geometrySelect = '';
+  if (geoColumn) {
+    const baseExpression = geometryExpression(geoColumn, Boolean(isAlreadyGeometry));
+    if (sourceCrs) {
+      const crsLiteral = escapeSource(sourceCrs);
+      geometrySelect = `, ST_AsWKB(ST_Transform(${baseExpression}, '${crsLiteral}', 'EPSG:4326', true)) AS __wkb`;
+    } else {
+      geometrySelect = `, ST_AsWKB(${baseExpression}) AS __wkb`;
+    }
+  }
+
+  const selectedColumns = columns?.length ? columns.map((column) => quoteIdentifier(column)).join(', ') : '*';
+  const pagination =
+    limit !== null ? ` LIMIT ${limit} OFFSET ${offset}` : offset > 0 ? ` OFFSET ${offset}` : '';
+  return query(
+    `SELECT ${selectedColumns}${geometrySelect} FROM read_parquet('${escapeSource(source)}')${where}${pagination}`
+  );
+}
