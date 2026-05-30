@@ -131,22 +131,56 @@ function GeoParquetLayer({ map }) {
 Legacy aliases `PluginControl`, `PluginControlReact`, and `usePluginState` are exported for
 template migration, but new code should use the GeoParquet names.
 
+## Runtime requirements
+
+The DuckDB-WASM runtime and its `parquet`, `httpfs`, and `spatial` extensions are loaded
+from public CDNs at runtime (the DuckDB-WASM core from jsDelivr and the extensions from
+`extensions.duckdb.org`) rather than bundled into the package. This keeps the published
+package small, but means the host page needs network access to those origins the first time
+a GeoParquet file is loaded.
+
+### Self-hosting the runtime
+
+To avoid the public CDNs (for offline use, air-gapped deployments, or stricter CSP), call
+`configureDuckDB` once before the first GeoParquet file is loaded. Pass custom DuckDB-WASM
+bundles, a mirrored extension repository, or both:
+
+```ts
+import { configureDuckDB } from 'maplibre-gl-geoparquet';
+import * as duckdb from '@duckdb/duckdb-wasm';
+
+configureDuckDB({
+  // Serve the DuckDB-WASM core/worker from your own origin.
+  bundles: {
+    mvp: {
+      mainModule: '/duckdb/duckdb-mvp.wasm',
+      mainWorker: '/duckdb/duckdb-browser-mvp.worker.js',
+    },
+    eh: {
+      mainModule: '/duckdb/duckdb-eh.wasm',
+      mainWorker: '/duckdb/duckdb-browser-eh.worker.js',
+    },
+  } satisfies duckdb.DuckDBBundles,
+  // Mirror of extensions.duckdb.org laid out as
+  // <base>/<version>/wasm_eh/<name>.duckdb_extension.wasm
+  extensionRepository: 'https://cdn.example.com/duckdb-extensions',
+});
+```
+
+DuckDB is initialized lazily and cached, so `configureDuckDB` only takes effect when called
+before the first load.
+
 ## Development
 
 ```bash
 npm install
-npm run load-extensions
 npm run dev
 ```
-
-The DuckDB `parquet`, `httpfs`, and `spatial` WASM extensions are downloaded into
-`extensions/` during builds.
 
 ## Scripts
 
 | Script | Description |
 |---|---|
-| `npm run load-extensions` | Download DuckDB WASM extensions |
 | `npm run dev` | Start the Vite dev server |
 | `npm run build` | Build the library |
 | `npm run build:examples` | Build the examples site |
