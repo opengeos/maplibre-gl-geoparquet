@@ -86,4 +86,52 @@ describe('GeoParquetControl', () => {
     expect(mapContainer.querySelector('.geoparquet-control-panel')).toBeNull();
     expect(container.parentNode).toBeNull();
   });
+
+  it('renders pickable toggle and allows multiple local files', () => {
+    const { map, mapContainer } = createMapStub();
+    const control = new GeoParquetControl({ pickable: false, collapsed: false });
+
+    control.onAdd(map as never);
+
+    const fileInput = mapContainer.querySelector<HTMLInputElement>('.geoparquet-control-file');
+    const pickableInput = mapContainer.querySelector<HTMLInputElement>(
+      '.geoparquet-control-check input[type="checkbox"]'
+    );
+
+    expect(fileInput?.multiple).toBe(true);
+    expect(pickableInput?.checked).toBe(false);
+
+    control.setPickable(true);
+
+    expect(control.getState().pickable).toBe(true);
+  });
+
+  it('renders layer name and before_id inputs for load options', () => {
+    const { map, mapContainer } = createMapStub();
+    const control = new GeoParquetControl({
+      beforeId: 'settlement-label',
+      collapsed: false,
+      layerName: 'Countries',
+    });
+
+    control.onAdd(map as never);
+
+    const inputs = Array.from(mapContainer.querySelectorAll<HTMLInputElement>('.geoparquet-control-input'));
+
+    expect(inputs.some((input) => input.value === 'Countries')).toBe(true);
+    expect(inputs.some((input) => input.value === 'settlement-label')).toBe(true);
+  });
+
+  it('shows sample URL without loading it', () => {
+    const { map, mapContainer } = createMapStub();
+    const sampleUrl = 'https://example.com/sample.parquet';
+    const control = new GeoParquetControl({ collapsed: false, sampleUrl });
+
+    control.onAdd(map as never);
+
+    const inputs = Array.from(mapContainer.querySelectorAll<HTMLInputElement>('.geoparquet-control-input'));
+
+    expect(inputs.some((input) => input.value === sampleUrl)).toBe(true);
+    expect(control.getState().layers).toHaveLength(0);
+  });
 });

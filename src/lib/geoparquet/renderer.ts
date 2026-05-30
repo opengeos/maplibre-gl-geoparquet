@@ -17,34 +17,58 @@ type DeckInfo = {
   picked?: boolean;
   object?: Record<string, unknown>;
   index?: number;
-  x?: number;
-  y?: number;
+  coordinate?: number[];
 };
 
+export interface GeoParquetRenderedLayer {
+  id: string;
+  name: string;
+  beforeId: string | null;
+  results: GeoArrowResult[];
+}
+
+export interface GeoParquetPickInfo {
+  layerId: string;
+  index: number;
+  coordinate: [number, number] | null;
+}
+
 export interface GeoParquetRendererOptions {
-  onSelect: (index: number | null) => void;
+  onSelect: (selection: GeoParquetPickInfo | null) => void;
+  interleaved?: boolean;
 }
 
 export class GeoParquetRenderer {
   private map: MapLibreMap;
   private overlay: MapboxOverlay;
+  private selectedLayerId: string | null = null;
   private selectedIndex: number | null = null;
-  private onSelect: (index: number | null) => void;
+  private pickable = true;
+  private onSelect: (selection: GeoParquetPickInfo | null) => void;
+  private currentLayers: GeoParquetRenderedLayer[] = [];
 
   constructor(map: MapLibreMap, options: GeoParquetRendererOptions) {
     this.map = map;
     this.onSelect = options.onSelect;
-    this.overlay = new MapboxOverlay({ layers: [], interleaved: false });
+    this.overlay = new MapboxOverlay({ layers: [], interleaved: options.interleaved ?? true });
     this.map.addControl(this.overlay);
   }
 
-  setSelectedIndex(index: number | null): void {
+  setPickable(pickable: boolean): void {
+    this.pickable = pickable;
+  }
+
+  setSelectedFeature(layerId: string | null, index: number | null): void {
+    this.selectedLayerId = layerId;
     this.selectedIndex = index;
   }
 
-  setData(results: GeoArrowResult[]): void {
-    const layers = results.flatMap((result, index) => this.createLayers(result, index));
-    this.overlay.setProps({ layers: layers as never[] });
+  setData(layers: GeoParquetRenderedLayer[]): void {
+    this.currentLayers = layers;
+    const deckLayers = layers.flatMap((layer) =>
+      layer.results.flatMap((result, index) => this.createLayers(layer.id, result, index))
+    );
+    this.overlay.setProps({ layers: deckLayers as never[] });
     this.map.triggerRepaint();
   }
 
@@ -67,28 +91,46 @@ export class GeoParquetRenderer {
     return null;
   }
 
-  private createLayers(result: GeoArrowResult, index: number): unknown[] {
-    const layerId = `geoparquet-${result.geometryType}-${index}`;
+  private createLayers(layerId: string, result: GeoArrowResult, index: number): unknown[] {
+    const layerKey = `geoparquet-${layerId}-${result.geometryType}-${index}`;
     const indexColumn = result.table.getChild('__index');
     const indexValues = indexColumn ? indexColumn.toArray() : null;
     const isSelected = (objectInfo: { index: number }) =>
-      this.selectedIndex !== null && indexValues !== null && indexValues[objectInfo.index] === this.selectedIndex;
+      this.selectedLayerId === layerId &&
+      this.selectedIndex !== null &&
+      indexValues !== null &&
+      indexValues[objectInfo.index] === this.selectedIndex;
     const handleHover = (info: DeckInfo) => {
-      this.map.getCanvas().style.cursor = info.object ? 'pointer' : '';
+      this.map.getCanvas().style.cursor = this.pickable && info.object ? 'pointer' : '';
     };
     const handleClick = (info: DeckInfo) => {
-      if (!info.picked) return false;
+      if (!this.pickable || !info.picked) return false;
       const indexValue = this.rowIndex(info);
       if (indexValue === null) return false;
-      this.selectedIndex = indexValue === this.selectedIndex ? null : indexValue;
-      this.onSelect(this.selectedIndex);
+      const isSameSelection = this.selectedLayerId === layerId && this.selectedIndex === indexValue;
+      this.selectedLayerId = isSameSelection ? null : layerId;
+      this.selectedIndex = isSameSelection ? null : indexValue;
+      const coordinate =
+        info.coordinate && info.coordinate.length >= 2
+          ? ([info.coordinate[0], info.coordinate[1]] as [number, number])
+          : null;
+      this.onSelect(
+        this.selectedLayerId && this.selectedIndex !== null
+          ? {
+              layerId: this.selectedLayerId,
+              index: this.selectedIndex,
+              coordinate,
+            }
+          : null
+      );
       return true;
     };
 
     if (result.geometryType === 'point' || result.geometryType === 'multipoint') {
       return [
         new GeoArrowScatterplotLayer({
-          id: layerId,
+          id: layerKey,
+          beforeId: this.getLayerBeforeId(layerId),
           data: result.table,
           getFillColor: (objectInfo: { index: number }) =>
             isSelected(objectInfo) ? SELECTED_FILL : NORMAL_FILL,
@@ -96,14 +138,14 @@ export class GeoParquetRenderer {
           radiusUnits: 'pixels',
           radiusMinPixels: 4,
           radiusMaxPixels: 12,
-          pickable: true,
-          autoHighlight: true,
+          pickable: this.pickable,
+          autoHighlight: this.pickable,
           highlightColor: HIGHLIGHT,
           _validate: false,
           onHover: handleHover,
           onClick: handleClick,
           updateTriggers: {
-            getFillColor: [this.selectedIndex],
+            getFillColor: [this.selectedLayerId, this.selectedIndex],
           },
         }),
       ];
@@ -112,20 +154,21 @@ export class GeoParquetRenderer {
     if (result.geometryType === 'linestring' || result.geometryType === 'multilinestring') {
       return [
         new GeoArrowPathLayer({
-          id: layerId,
+          id: layerKey,
+          beforeId: this.getLayerBeforeId(layerId),
           data: result.table,
           getColor: (objectInfo: { index: number }) => (isSelected(objectInfo) ? SELECTED_LINE : NORMAL_LINE),
           getWidth: 2.5,
           widthUnits: 'pixels',
           widthMinPixels: 1.5,
-          pickable: true,
-          autoHighlight: true,
+          pickable: this.pickable,
+          autoHighlight: this.pickable,
           highlightColor: HIGHLIGHT,
           _validate: false,
           onHover: handleHover,
           onClick: handleClick,
           updateTriggers: {
-            getColor: [this.selectedIndex],
+            getColor: [this.selectedLayerId, this.selectedIndex],
           },
         }),
       ];
@@ -133,7 +176,8 @@ export class GeoParquetRenderer {
 
     return [
       new GeoArrowPolygonLayer({
-        id: layerId,
+        id: layerKey,
+        beforeId: this.getLayerBeforeId(layerId),
         data: result.table,
         getFillColor: (objectInfo: { index: number }) =>
           isSelected(objectInfo) ? SELECTED_FILL : NORMAL_FILL,
@@ -141,17 +185,21 @@ export class GeoParquetRenderer {
           isSelected(objectInfo) ? SELECTED_LINE : NORMAL_LINE,
         getLineWidth: 2,
         lineWidthMinPixels: 1.5,
-        pickable: true,
-        autoHighlight: true,
+        pickable: this.pickable,
+        autoHighlight: this.pickable,
         highlightColor: HIGHLIGHT,
         _validate: false,
         onHover: handleHover,
         onClick: handleClick,
         updateTriggers: {
-          getFillColor: [this.selectedIndex],
-          getLineColor: [this.selectedIndex],
+          getFillColor: [this.selectedLayerId, this.selectedIndex],
+          getLineColor: [this.selectedLayerId, this.selectedIndex],
         },
       }),
     ];
+  }
+
+  private getLayerBeforeId(layerId: string): string | undefined {
+    return this.currentLayers.find((layer) => layer.id === layerId)?.beforeId ?? undefined;
   }
 }

@@ -12,6 +12,7 @@ export type {
   GeoParquetControlEvent,
   GeoParquetControlEventHandler,
   GeoParquetFeatureSelection,
+  GeoParquetLayerState,
   PluginControlOptions,
   PluginState,
   PluginControlReactProps,

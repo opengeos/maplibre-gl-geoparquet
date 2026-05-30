@@ -13,6 +13,7 @@ export type {
   GeoParquetColumn,
   GeoParquetMetadata,
   GeoParquetFeatureSelection,
+  GeoParquetLayerState,
   PluginControlOptions,
   PluginState,
   PluginControlEvent,

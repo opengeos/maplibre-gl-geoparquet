@@ -7,6 +7,8 @@ const DEFAULT_STATE: GeoParquetState = {
   panelWidth: DEFAULT_PANEL_WIDTH,
   source: null,
   displaySource: '',
+  layers: [],
+  activeLayerId: null,
   loading: false,
   statusMessage: '',
   error: null,
@@ -19,6 +21,7 @@ const DEFAULT_STATE: GeoParquetState = {
   primaryGeoColumn: null,
   selectedFeature: null,
   metadata: null,
+  pickable: true,
 };
 
 export function useGeoParquetState(initialState?: Partial<GeoParquetState>) {

@@ -54,6 +54,12 @@ export function GeoParquetControlReact({
     control.loadUrl(options.sourceUrl).catch(() => {});
   }, [options.sourceUrl]);
 
+  useEffect(() => {
+    const control = controlRef.current;
+    if (!control || !options.sourceUrls?.length) return;
+    control.loadUrls(options.sourceUrls).catch(() => {});
+  }, [options.sourceUrls]);
+
   return null;
 }
 

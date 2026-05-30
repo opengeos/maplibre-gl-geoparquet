@@ -1,4 +1,4 @@
-import type { IControl, Map as MapLibreMap } from 'maplibre-gl';
+import maplibregl, { type IControl, type Map as MapLibreMap } from 'maplibre-gl';
 import { buildGeoArrowTables, resolveCloudUrl, toBinary, type GeoArrowResult } from '@walkthru-earth/objex-utils';
 import {
   bootstrapMetadata,
@@ -10,7 +10,10 @@ import {
 } from '../geoparquet/duckdb';
 import { checkFileHealth, type FileHealthWarning } from '../geoparquet/fileHealth';
 import { DEFAULT_PAGE_SIZE, DEFAULT_PANEL_WIDTH, DEFAULT_TITLE } from '../geoparquet/constants';
-import { GeoParquetRenderer } from '../geoparquet/renderer';
+import {
+  GeoParquetRenderer,
+  type GeoParquetPickInfo,
+} from '../geoparquet/renderer';
 import {
   detectPrimaryGeoColumn,
   formatDisplayValue,
@@ -30,11 +33,17 @@ import type {
   GeoParquetControlOptions,
   GeoParquetFeatureSelection,
   GeoParquetGeoMetadata,
+  GeoParquetLayerState,
   GeoParquetMetadata,
   GeoParquetState,
 } from './types';
 
-const DEFAULT_OPTIONS: Required<Omit<GeoParquetControlOptions, 'sourceUrl' | 'selectedColumns'>> = {
+const DEFAULT_OPTIONS: Required<
+    Omit<
+      GeoParquetControlOptions,
+      'sourceUrl' | 'sourceUrls' | 'sampleUrl' | 'selectedColumns' | 'layerName' | 'beforeId'
+    >
+> = {
   collapsed: true,
   position: 'top-right',
   title: DEFAULT_TITLE,
@@ -44,9 +53,35 @@ const DEFAULT_OPTIONS: Required<Omit<GeoParquetControlOptions, 'sourceUrl' | 'se
   fitBoundsOnLoad: true,
   allowLocalFiles: true,
   allowRemoteUrls: true,
+  pickable: true,
+  interleaved: true,
 };
 
 type EventHandlersMap = globalThis.Map<GeoParquetControlEvent, Set<GeoParquetControlEventHandler>>;
+
+interface LoadedGeoParquetLayer {
+  id: string;
+  name: string;
+  beforeId: string | null;
+  source: string;
+  displaySource: string;
+  localFileName: string | null;
+  schema: GeoParquetColumn[];
+  geoMetadata: GeoParquetGeoMetadata | null;
+  metadata: GeoParquetMetadata | null;
+  selectedColumns: string[] | null;
+  pageSize: number;
+  totalRows: number;
+  filteredCount: number | null;
+  currentOffset: number;
+  lastPageFull: boolean;
+  primaryGeoColumn: string | null;
+  geoColumns: string[];
+  geoArrowResults: GeoArrowResult[];
+  rows: Record<number, Record<string, unknown>>;
+  currentViewportBbox: [number, number, number, number] | null;
+  warnings: FileHealthWarning[];
+}
 
 export class GeoParquetControl implements IControl {
   private map?: MapLibreMap;
@@ -55,42 +90,39 @@ export class GeoParquetControl implements IControl {
   private panel?: HTMLElement;
   private content?: HTMLElement;
   private renderer?: GeoParquetRenderer;
-  private options: Required<Omit<GeoParquetControlOptions, 'sourceUrl' | 'selectedColumns'>> &
-    Pick<GeoParquetControlOptions, 'sourceUrl' | 'selectedColumns'>;
+  private popup: maplibregl.Popup | null = null;
+  private options: Required<
+    Omit<
+      GeoParquetControlOptions,
+      'sourceUrl' | 'sourceUrls' | 'sampleUrl' | 'selectedColumns' | 'layerName' | 'beforeId'
+    >
+  > &
+    Pick<
+      GeoParquetControlOptions,
+      'sourceUrl' | 'sourceUrls' | 'sampleUrl' | 'selectedColumns' | 'layerName' | 'beforeId'
+    >;
   private eventHandlers: EventHandlersMap = new globalThis.Map();
   private resizeHandler: (() => void) | null = null;
   private mapResizeHandler: (() => void) | null = null;
   private clickOutsideHandler: ((event: MouseEvent) => void) | null = null;
 
   private collapsed: boolean;
-  private source: string | null = null;
-  private displaySource = '';
-  private localFileName: string | null = null;
+  private layers: LoadedGeoParquetLayer[] = [];
+  private activeLayerId: string | null = null;
   private loading = false;
   private statusMessage = '';
   private error: string | null = null;
-  private schema: GeoParquetColumn[] = [];
-  private geoMetadata: GeoParquetGeoMetadata | null = null;
-  private metadata: GeoParquetMetadata | null = null;
-  private selectedColumns: string[] | null = null;
-  private pageSize: number;
-  private totalRows = -1;
-  private filteredCount: number | null = null;
-  private currentOffset = 0;
-  private lastPageFull = false;
-  private primaryGeoColumn: string | null = null;
-  private geoColumns: string[] = [];
-  private geoArrowResults: GeoArrowResult[] = [];
-  private rows: Record<number, Record<string, unknown>> = {};
   private selectedFeature: GeoParquetFeatureSelection | null = null;
-  private currentViewportBbox: [number, number, number, number] | null = null;
-  private warnings: FileHealthWarning[] = [];
+  private pickable: boolean;
+  private nextLayerName = '';
+  private nextBeforeId = '';
 
   constructor(options?: Partial<GeoParquetControlOptions>) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.collapsed = this.options.collapsed;
-    this.pageSize = this.options.pageSize;
-    this.selectedColumns = this.options.selectedColumns ?? null;
+    this.pickable = this.options.pickable;
+    this.nextLayerName = this.options.layerName ?? '';
+    this.nextBeforeId = this.options.beforeId ?? '';
   }
 
   onAdd(map: MapLibreMap): HTMLElement {
@@ -101,8 +133,10 @@ export class GeoParquetControl implements IControl {
     this.content = this.panel.querySelector('.geoparquet-control-content') as HTMLElement;
     this.mapContainer.appendChild(this.panel);
     this.renderer = new GeoParquetRenderer(map, {
-      onSelect: (index) => this.handleMapSelect(index),
+      onSelect: (selection) => this.handleMapSelect(selection),
+      interleaved: this.options.interleaved,
     });
+    this.renderer.setPickable(this.pickable);
     this.setupEventListeners();
 
     if (!this.collapsed) {
@@ -111,9 +145,13 @@ export class GeoParquetControl implements IControl {
     }
     this.renderContent();
 
-    if (this.options.sourceUrl) {
-      this.loadUrl(this.options.sourceUrl).catch(() => {
-        // loadUrl renders and emits the error.
+    const initialUrls = [
+      ...(this.options.sourceUrls ?? []),
+      ...(this.options.sourceUrl ? [this.options.sourceUrl] : []),
+    ];
+    if (initialUrls.length > 0) {
+      this.loadUrls(initialUrls).catch(() => {
+        // loadUrls renders and emits errors.
       });
     }
 
@@ -125,12 +163,13 @@ export class GeoParquetControl implements IControl {
     if (this.mapResizeHandler && this.map) this.map.off('resize', this.mapResizeHandler);
     if (this.clickOutsideHandler) document.removeEventListener('click', this.clickOutsideHandler);
 
+    this.popup?.remove();
     this.renderer?.remove();
     this.panel?.parentNode?.removeChild(this.panel);
     this.container?.parentNode?.removeChild(this.container);
-    if (this.localFileName) {
-      dropFile(this.localFileName).catch(() => {});
-    }
+    this.layers.forEach((layer) => {
+      if (layer.localFileName) dropFile(layer.localFileName).catch(() => {});
+    });
 
     this.map = undefined;
     this.mapContainer = undefined;
@@ -142,25 +181,27 @@ export class GeoParquetControl implements IControl {
   }
 
   getState(): GeoParquetState {
-    const loadedRows = Object.keys(this.rows).length;
-    const activeTotal = this.filteredCount ?? this.totalRows;
+    const activeLayer = this.getActiveLayer();
     return {
       collapsed: this.collapsed,
       panelWidth: this.options.panelWidth,
-      source: this.source,
-      displaySource: this.displaySource,
+      source: activeLayer?.source ?? null,
+      displaySource: activeLayer?.displaySource ?? '',
+      layers: this.layers.map((layer) => this.toLayerState(layer)),
+      activeLayerId: this.activeLayerId,
       loading: this.loading,
       statusMessage: this.statusMessage,
       error: this.error,
-      schema: [...this.schema],
-      selectedColumns: this.selectedColumns ? [...this.selectedColumns] : null,
-      pageSize: this.pageSize,
-      totalRows: this.totalRows,
-      loadedRows,
-      hasMore: activeTotal < 0 ? this.lastPageFull : loadedRows < activeTotal,
-      primaryGeoColumn: this.primaryGeoColumn,
+      schema: activeLayer ? [...activeLayer.schema] : [],
+      selectedColumns: activeLayer?.selectedColumns ? [...activeLayer.selectedColumns] : null,
+      pageSize: activeLayer?.pageSize ?? this.options.pageSize,
+      totalRows: activeLayer?.totalRows ?? -1,
+      loadedRows: activeLayer ? Object.keys(activeLayer.rows).length : 0,
+      hasMore: activeLayer ? this.layerHasMore(activeLayer) : false,
+      primaryGeoColumn: activeLayer?.primaryGeoColumn ?? null,
       selectedFeature: this.selectedFeature,
-      metadata: this.metadata,
+      metadata: activeLayer?.metadata ?? null,
+      pickable: this.pickable,
     };
   }
 
@@ -204,111 +245,196 @@ export class GeoParquetControl implements IControl {
     return this.container;
   }
 
+  setPickable(pickable: boolean): void {
+    this.pickable = pickable;
+    this.renderer?.setPickable(pickable);
+    if (!pickable) {
+      this.selectedFeature = null;
+      this.popup?.remove();
+      this.popup = null;
+      this.renderer?.setSelectedFeature(null, null);
+    }
+    this.renderAllLayers();
+    this.renderContent();
+    this.emit('statechange');
+  }
+
   async loadUrl(url: string): Promise<void> {
+    await this.loadUrls([url]);
+  }
+
+  async loadUrls(urls: string[]): Promise<void> {
     if (!this.options.allowRemoteUrls) {
       throw new Error('Remote URL loading is disabled for this GeoParquet control');
     }
-
-    this.resetData();
-    const resolvedUrl = resolveCloudUrl(url.trim());
-    this.source = resolvedUrl;
-    this.displaySource = resolvedUrl;
-    this.emit('loadstart');
-    this.setLoading('Checking file...');
-    this.warnings = await checkFileHealth(resolvedUrl);
-    await this.loadCurrentSource();
+    const normalizedUrls = urls.map((url) => url.trim()).filter(Boolean);
+    for (const url of normalizedUrls) {
+      const resolvedUrl = resolveCloudUrl(url);
+      this.emit('loadstart');
+      this.setLoading(`Checking ${this.displayNameFromSource(resolvedUrl)}...`);
+      const warnings = await checkFileHealth(resolvedUrl);
+      await this.loadSource({
+        source: resolvedUrl,
+        displaySource: resolvedUrl,
+        localFileName: null,
+        layerName: this.consumeLayerName(resolvedUrl),
+        beforeId: this.nextBeforeId.trim() || null,
+        warnings,
+      });
+    }
   }
 
   async loadFile(file: File): Promise<void> {
+    await this.loadFiles([file]);
+  }
+
+  async loadFiles(files: File[]): Promise<void> {
     if (!this.options.allowLocalFiles) {
       throw new Error('Local file loading is disabled for this GeoParquet control');
     }
-
-    this.resetData();
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const fileName = `local_${Date.now()}_${safeName}`;
-    this.source = fileName;
-    this.localFileName = fileName;
-    this.displaySource = file.name;
-    this.emit('loadstart');
-    this.setLoading(`Reading ${file.name}...`);
-
-    try {
-      const buffer = await file.arrayBuffer();
-      await initDB((message) => this.setProgress(message));
-      await registerLocalFile(fileName, buffer);
-      await this.loadCurrentSource();
-    } catch (error) {
-      this.handleError(error);
-      throw error;
+    for (const file of files) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const fileName = `local_${Date.now()}_${Math.random().toString(36).slice(2)}_${safeName}`;
+      this.emit('loadstart');
+      this.setLoading(`Reading ${file.name}...`);
+      try {
+        const buffer = await file.arrayBuffer();
+        await initDB((message) => this.setProgress(message));
+        await registerLocalFile(fileName, buffer);
+        await this.loadSource({
+          source: fileName,
+          displaySource: file.name,
+          localFileName: fileName,
+          layerName: this.consumeLayerName(file.name),
+          beforeId: this.nextBeforeId.trim() || null,
+          warnings: [],
+        });
+      } catch (error) {
+        this.handleError(error);
+        throw error;
+      }
     }
   }
 
   clear(): void {
-    if (this.localFileName) {
-      dropFile(this.localFileName).catch(() => {});
-    }
-    this.resetData();
+    this.layers.forEach((layer) => {
+      if (layer.localFileName) dropFile(layer.localFileName).catch(() => {});
+    });
+    this.layers = [];
+    this.activeLayerId = null;
+    this.loading = false;
+    this.statusMessage = '';
+    this.error = null;
+    this.selectedFeature = null;
+    this.popup?.remove();
+    this.popup = null;
     this.renderer?.clear();
     this.renderContent();
     this.emit('statechange');
   }
 
-  async loadMore(): Promise<void> {
-    if (!this.source || this.loading || !this.getState().hasMore) return;
+  removeLayer(layerId: string): void {
+    const layer = this.layers.find((item) => item.id === layerId);
+    if (!layer) return;
+    if (layer.localFileName) dropFile(layer.localFileName).catch(() => {});
+    this.layers = this.layers.filter((item) => item.id !== layerId);
+    if (this.activeLayerId === layerId) {
+      this.activeLayerId = this.layers.length ? this.layers[this.layers.length - 1].id : null;
+    }
+    if (this.selectedFeature?.layerId === layerId) {
+      this.selectedFeature = null;
+      this.popup?.remove();
+      this.popup = null;
+    }
+    this.renderAllLayers();
+    this.renderContent();
+    this.emit('statechange');
+  }
+
+  async loadMore(layerId = this.activeLayerId): Promise<void> {
+    const layer = this.getLayer(layerId);
+    if (!layer || this.loading || !this.layerHasMore(layer)) return;
     await this.runTask('Loading more rows...', async () => {
-      await this.executeQuery(this.currentOffset, this.pageSize, this.currentViewportBbox);
+      await this.executeQuery(layer, layer.currentOffset, layer.pageSize, layer.currentViewportBbox);
     });
   }
 
-  async reloadViewport(): Promise<void> {
-    if (!this.map || !this.source || !getBboxCovering(this.geoMetadata, this.primaryGeoColumn)) return;
+  async reloadViewport(layerId = this.activeLayerId): Promise<void> {
+    const layer = this.getLayer(layerId);
+    if (!this.map || !layer || !getBboxCovering(layer.geoMetadata, layer.primaryGeoColumn)) return;
     const bounds = this.map.getBounds();
-    this.currentViewportBbox = [
+    layer.currentViewportBbox = [
       bounds.getWest(),
       bounds.getSouth(),
       bounds.getEast(),
       bounds.getNorth(),
     ];
-    this.rows = {};
-    this.geoArrowResults = [];
-    this.currentOffset = 0;
-    this.selectedFeature = null;
-    this.filteredCount = null;
-    this.renderer?.clear();
+    this.clearLayerData(layer);
 
     await this.runTask('Loading current viewport...', async () => {
-      this.filteredCount = await queryCount(
-        this.source!,
+      layer.filteredCount = await queryCount(
+        layer.source,
         [],
-        this.currentViewportBbox,
-        this.primaryGeoColumn,
-        getSourceCrsString(this.geoMetadata, this.primaryGeoColumn),
-        getBboxCovering(this.geoMetadata, this.primaryGeoColumn)
+        layer.currentViewportBbox,
+        layer.primaryGeoColumn,
+        getSourceCrsString(layer.geoMetadata, layer.primaryGeoColumn),
+        getBboxCovering(layer.geoMetadata, layer.primaryGeoColumn)
       );
-      await this.executeQuery(0, this.pageSize, this.currentViewportBbox);
+      await this.executeQuery(layer, 0, layer.pageSize, layer.currentViewportBbox);
     });
   }
 
-  private async loadCurrentSource(): Promise<void> {
-    if (!this.source) return;
+  private async loadSource({
+    source,
+    displaySource,
+    localFileName,
+    layerName,
+    beforeId,
+    warnings,
+  }: {
+    source: string;
+    displaySource: string;
+    localFileName: string | null;
+    layerName: string;
+    beforeId: string | null;
+    warnings: FileHealthWarning[];
+  }): Promise<void> {
     try {
       await initDB((message) => this.setProgress(message));
-      this.setProgress('Reading GeoParquet metadata...');
-      this.metadata = await bootstrapMetadata(this.source, (message) => this.setProgress(message));
-      this.schema = this.metadata.schema;
-      this.geoMetadata = this.metadata.geoMetadata;
-      this.totalRows = this.metadata.totalRows;
-      this.primaryGeoColumn = detectPrimaryGeoColumn(this.schema, this.geoMetadata);
-      this.geoColumns = this.geoMetadata?.columns
-        ? Object.keys(this.geoMetadata.columns)
-        : this.primaryGeoColumn
-          ? [this.primaryGeoColumn]
+      this.setProgress(`Reading ${this.displayNameFromSource(displaySource)} metadata...`);
+      const metadata = await bootstrapMetadata(source, (message) => this.setProgress(message));
+      const primaryGeoColumn = detectPrimaryGeoColumn(metadata.schema, metadata.geoMetadata);
+      const geoColumns = metadata.geoMetadata?.columns
+        ? Object.keys(metadata.geoMetadata.columns)
+        : primaryGeoColumn
+          ? [primaryGeoColumn]
           : [];
-      if (this.options.selectedColumns) {
-        this.selectedColumns = [...this.options.selectedColumns];
-      }
-      await this.executeQuery(0, this.pageSize, null);
+      const layer: LoadedGeoParquetLayer = {
+        id: this.createLayerId(),
+        name: layerName,
+        beforeId,
+        source,
+        displaySource,
+        localFileName,
+        schema: metadata.schema,
+        geoMetadata: metadata.geoMetadata,
+        metadata,
+        selectedColumns: this.options.selectedColumns ? [...this.options.selectedColumns] : null,
+        pageSize: this.options.pageSize,
+        totalRows: metadata.totalRows,
+        filteredCount: null,
+        currentOffset: 0,
+        lastPageFull: false,
+        primaryGeoColumn,
+        geoColumns,
+        geoArrowResults: [],
+        rows: {},
+        currentViewportBbox: null,
+        warnings,
+      };
+      this.layers.push(layer);
+      this.activeLayerId = layer.id;
+      await this.executeQuery(layer, 0, layer.pageSize, null);
       this.loading = false;
       this.statusMessage = '';
       this.error = null;
@@ -316,6 +442,7 @@ export class GeoParquetControl implements IControl {
       this.emit('load');
       this.emit('statechange');
     } catch (error) {
+      if (localFileName) dropFile(localFileName).catch(() => {});
       this.handleError(error);
       throw error;
     }
@@ -336,23 +463,23 @@ export class GeoParquetControl implements IControl {
   }
 
   private async executeQuery(
+    layer: LoadedGeoParquetLayer,
     offset = 0,
-    limit: number | null = this.pageSize,
+    limit: number | null = layer.pageSize,
     bbox: [number, number, number, number] | null = null
   ): Promise<void> {
-    if (!this.source) return;
-    const displayColumns = getDisplayColumns(this.schema, this.geoColumns, this.selectedColumns);
+    const displayColumns = getDisplayColumns(layer.schema, layer.geoColumns, layer.selectedColumns);
     const displayColumnNames = displayColumns.map((column) => column.name);
-    const geoColumn = this.primaryGeoColumn;
+    const geoColumn = layer.primaryGeoColumn;
     const selectedQueryColumns = geoColumn ? [...displayColumnNames, geoColumn] : displayColumnNames;
     if (selectedQueryColumns.length === 0) return;
 
-    const result = await queryData(this.source, {
+    const result = await queryData(layer.source, {
       geoColumn,
       bbox,
-      sourceCrs: getSourceCrsString(this.geoMetadata, this.primaryGeoColumn),
+      sourceCrs: getSourceCrsString(layer.geoMetadata, layer.primaryGeoColumn),
       columns: selectedQueryColumns,
-      bboxCovering: getBboxCovering(this.geoMetadata, this.primaryGeoColumn),
+      bboxCovering: getBboxCovering(layer.geoMetadata, layer.primaryGeoColumn),
       limit,
       offset,
     });
@@ -368,11 +495,11 @@ export class GeoParquetControl implements IControl {
 
     for (let rowIndex = 0; rowIndex < result.numRows; rowIndex += 1) {
       const globalIndex = offset + rowIndex;
-      const row: Record<string, unknown> = { __index: globalIndex };
+      const row: Record<string, unknown> = { __index: globalIndex, __layer: layer.displaySource };
       displayVectors.forEach(({ name, vector }) => {
         row[name] = vector ? formatDisplayValue(vector.get(rowIndex)) : null;
       });
-      this.rows[globalIndex] = row;
+      layer.rows[globalIndex] = row;
 
       const rawWkb = wkbFromSpatial?.get(rowIndex) ?? rawWkbVector?.get(rowIndex);
       const wkb = wkbFromSpatial ? normalizeBinary(rawWkb) : toBinary(rawWkb);
@@ -387,25 +514,24 @@ export class GeoParquetControl implements IControl {
       const geoArrowResults = buildGeoArrowTables(
         mapWkbs,
         attributes,
-        getKnownGeometryType(this.geoMetadata, this.primaryGeoColumn)
+        getKnownGeometryType(layer.geoMetadata, layer.primaryGeoColumn)
       );
-      this.geoArrowResults = this.geoArrowResults.concat(geoArrowResults);
-      this.renderer?.setSelectedIndex(this.selectedFeature?.index ?? null);
-      this.renderer?.setData(this.geoArrowResults);
+      layer.geoArrowResults = layer.geoArrowResults.concat(geoArrowResults);
+      this.renderAllLayers();
       if (offset === 0 && this.options.fitBoundsOnLoad) {
-        this.fitToData(geoArrowResults);
+        this.fitToData(layer, geoArrowResults);
       }
     }
 
-    this.currentOffset = offset + result.numRows;
-    this.lastPageFull = limit !== null ? result.numRows >= limit : false;
+    layer.currentOffset = offset + result.numRows;
+    layer.lastPageFull = limit !== null ? result.numRows >= limit : false;
     this.renderContent();
   }
 
-  private fitToData(results: GeoArrowResult[]): void {
+  private fitToData(layer: LoadedGeoParquetLayer, results: GeoArrowResult[]): void {
     if (!this.map) return;
-    let bounds = this.geoMetadata?.columns?.[this.primaryGeoColumn ?? '']?.bbox;
-    if (bounds && needsReprojection(this.geoMetadata, this.primaryGeoColumn)) {
+    let bounds = layer.geoMetadata?.columns?.[layer.primaryGeoColumn ?? '']?.bbox;
+    if (bounds && needsReprojection(layer.geoMetadata, layer.primaryGeoColumn)) {
       bounds = undefined;
     }
     if (!bounds && results.length) {
@@ -433,47 +559,115 @@ export class GeoParquetControl implements IControl {
     }
   }
 
-  private handleMapSelect(index: number | null): void {
-    this.selectedFeature =
-      index === null
-        ? null
-        : {
-            index,
-            properties: this.rows[index] ?? { __index: index },
-          };
-    this.renderer?.setSelectedIndex(index);
-    this.renderer?.setData(this.geoArrowResults);
+  private handleMapSelect(selection: GeoParquetPickInfo | null): void {
+    if (!this.pickable || !selection) {
+      this.selectedFeature = null;
+      this.popup?.remove();
+      this.popup = null;
+      this.renderer?.setSelectedFeature(null, null);
+      this.renderContent();
+      this.emit('select', { selection: null });
+      this.emit('statechange');
+      return;
+    }
+
+    const layer = this.getLayer(selection.layerId);
+    if (!layer) return;
+    this.activeLayerId = layer.id;
+    this.selectedFeature = {
+      layerId: layer.id,
+      layerName: layer.name,
+      index: selection.index,
+      properties: layer.rows[selection.index] ?? { __index: selection.index },
+    };
+    this.renderer?.setSelectedFeature(layer.id, selection.index);
+    this.renderAllLayers();
+    this.showAttributePopup(selection.coordinate);
     this.renderContent();
     this.emit('select', { selection: this.selectedFeature });
     this.emit('statechange');
   }
 
-  private resetData(): void {
-    if (this.localFileName) {
-      dropFile(this.localFileName).catch(() => {});
+  private showAttributePopup(coordinate: [number, number] | null): void {
+    if (!this.map || !this.selectedFeature || !coordinate) return;
+    const rows = Object.entries(this.selectedFeature.properties)
+      .filter(([key]) => !key.startsWith('__'))
+      .slice(0, 8)
+      .map(([key, value]) => `<tr><th>${this.escapeHtml(key)}</th><td>${this.escapeHtml(String(value ?? ''))}</td></tr>`)
+      .join('');
+    this.popup?.remove();
+    this.popup = new maplibregl.Popup({
+      className: 'geoparquet-attribute-popup',
+      closeButton: true,
+      closeOnClick: false,
+      maxWidth: '320px',
+    })
+      .setLngLat(coordinate)
+      .setHTML(
+        `<div class="geoparquet-popup"><strong>${this.escapeHtml(
+          this.selectedFeature.layerName
+        )}</strong><table>${rows}</table></div>`
+      )
+      .addTo(this.map);
+  }
+
+  private clearLayerData(layer: LoadedGeoParquetLayer): void {
+    layer.rows = {};
+    layer.geoArrowResults = [];
+    layer.currentOffset = 0;
+    layer.lastPageFull = false;
+    if (this.selectedFeature?.layerId === layer.id) {
+      this.selectedFeature = null;
+      this.popup?.remove();
+      this.popup = null;
     }
-    this.source = null;
-    this.displaySource = '';
-    this.localFileName = null;
-    this.loading = false;
-    this.statusMessage = '';
-    this.error = null;
-    this.schema = [];
-    this.geoMetadata = null;
-    this.metadata = null;
-    this.selectedColumns = this.options.selectedColumns ? [...this.options.selectedColumns] : null;
-    this.pageSize = this.options.pageSize;
-    this.totalRows = -1;
-    this.filteredCount = null;
-    this.currentOffset = 0;
-    this.lastPageFull = false;
-    this.primaryGeoColumn = null;
-    this.geoColumns = [];
-    this.geoArrowResults = [];
-    this.rows = {};
-    this.selectedFeature = null;
-    this.currentViewportBbox = null;
-    this.warnings = [];
+    this.renderAllLayers();
+  }
+
+  private renderAllLayers(): void {
+    this.renderer?.setPickable(this.pickable);
+    this.renderer?.setSelectedFeature(this.selectedFeature?.layerId ?? null, this.selectedFeature?.index ?? null);
+    this.renderer?.setData(
+      this.layers.map((layer) => ({
+        id: layer.id,
+        name: layer.name,
+        beforeId: layer.beforeId,
+        results: layer.geoArrowResults,
+      }))
+    );
+  }
+
+  private getActiveLayer(): LoadedGeoParquetLayer | null {
+    return this.getLayer(this.activeLayerId);
+  }
+
+  private getLayer(layerId: string | null | undefined): LoadedGeoParquetLayer | null {
+    if (!layerId) return null;
+    return this.layers.find((layer) => layer.id === layerId) ?? null;
+  }
+
+  private layerHasMore(layer: LoadedGeoParquetLayer): boolean {
+    const loadedRows = Object.keys(layer.rows).length;
+    const activeTotal = layer.filteredCount ?? layer.totalRows;
+    return activeTotal < 0 ? layer.lastPageFull : loadedRows < activeTotal;
+  }
+
+  private toLayerState(layer: LoadedGeoParquetLayer): GeoParquetLayerState {
+    return {
+      id: layer.id,
+      name: layer.name,
+      beforeId: layer.beforeId,
+      source: layer.source,
+      displaySource: layer.displaySource,
+      schema: [...layer.schema],
+      selectedColumns: layer.selectedColumns ? [...layer.selectedColumns] : null,
+      pageSize: layer.pageSize,
+      totalRows: layer.totalRows,
+      loadedRows: Object.keys(layer.rows).length,
+      hasMore: this.layerHasMore(layer),
+      primaryGeoColumn: layer.primaryGeoColumn,
+      metadata: layer.metadata,
+    };
   }
 
   private setLoading(message: string): void {
@@ -636,14 +830,18 @@ export class GeoParquetControl implements IControl {
   private renderContent(): void {
     if (!this.content) return;
     this.content.replaceChildren();
+    const activeLayer = this.getActiveLayer();
 
     const fragment = document.createDocumentFragment();
     fragment.appendChild(this.renderLoadSection());
-    fragment.appendChild(this.renderStatusSection());
-    if (this.metadata) {
-      fragment.appendChild(this.renderMetadataSection());
-      fragment.appendChild(this.renderColumnSection());
-      fragment.appendChild(this.renderActionSection());
+    fragment.appendChild(this.renderStatusSection(activeLayer));
+    if (this.layers.length > 0) {
+      fragment.appendChild(this.renderLayerSection());
+    }
+    if (activeLayer) {
+      fragment.appendChild(this.renderMetadataSection(activeLayer));
+      fragment.appendChild(this.renderColumnSection(activeLayer));
+      fragment.appendChild(this.renderActionSection(activeLayer));
     }
     if (this.selectedFeature) {
       fragment.appendChild(this.renderSelectionSection());
@@ -658,22 +856,25 @@ export class GeoParquetControl implements IControl {
     if (this.options.allowRemoteUrls) {
       const label = document.createElement('label');
       label.className = 'geoparquet-control-label';
-      label.textContent = 'GeoParquet URL';
+      label.textContent = 'GeoParquet URL(s)';
       const row = document.createElement('div');
       row.className = 'geoparquet-control-row';
       const input = document.createElement('input');
       input.className = 'geoparquet-control-input';
-      input.type = 'url';
-      input.placeholder = 'https://example.com/data.parquet';
-      input.value = this.source && !this.localFileName ? this.source : '';
+      input.type = 'text';
+      input.placeholder = 'Paste one or more URLs';
+      input.value = this.options.sampleUrl ?? '';
       const button = document.createElement('button');
       button.className = 'geoparquet-control-button';
       button.type = 'button';
-      button.textContent = 'Load';
+      button.textContent = 'Add';
       button.disabled = this.loading;
-      button.addEventListener('click', () => {
-        if (input.value.trim()) {
-          this.loadUrl(input.value).catch(() => {});
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const urls = this.parseUrlList(input.value);
+        if (urls.length > 0) {
+          this.loadUrls(urls).catch(() => {});
+          input.value = '';
         }
       });
       row.appendChild(input);
@@ -682,24 +883,67 @@ export class GeoParquetControl implements IControl {
       section.appendChild(row);
     }
 
+    const layerFields = document.createElement('div');
+    layerFields.className = 'geoparquet-control-grid';
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'geoparquet-control-label';
+    nameLabel.textContent = 'Layer name';
+    const nameInput = document.createElement('input');
+    nameInput.className = 'geoparquet-control-input';
+    nameInput.type = 'text';
+    nameInput.placeholder = 'Auto';
+    nameInput.value = this.nextLayerName;
+    nameInput.addEventListener('input', () => {
+      this.nextLayerName = nameInput.value;
+    });
+    const beforeLabel = document.createElement('label');
+    beforeLabel.className = 'geoparquet-control-label';
+    beforeLabel.textContent = 'before_id';
+    const beforeInput = document.createElement('input');
+    beforeInput.className = 'geoparquet-control-input';
+    beforeInput.type = 'text';
+    beforeInput.placeholder = 'Map layer id';
+    beforeInput.value = this.nextBeforeId;
+    beforeInput.addEventListener('input', () => {
+      this.nextBeforeId = beforeInput.value;
+    });
+    nameLabel.appendChild(nameInput);
+    beforeLabel.appendChild(beforeInput);
+    layerFields.appendChild(nameLabel);
+    layerFields.appendChild(beforeLabel);
+    section.appendChild(layerFields);
+
     if (this.options.allowLocalFiles) {
       const fileInput = document.createElement('input');
       fileInput.className = 'geoparquet-control-file';
       fileInput.type = 'file';
       fileInput.accept = '.parquet,.geoparquet,application/octet-stream';
+      fileInput.multiple = true;
       fileInput.disabled = this.loading;
       fileInput.addEventListener('change', () => {
-        const file = fileInput.files?.[0];
-        if (file) this.loadFile(file).catch(() => {});
+        const files = Array.from(fileInput.files ?? []);
+        if (files.length > 0) this.loadFiles(files).catch(() => {});
       });
       section.appendChild(fileInput);
     }
 
-    if (this.source) {
+    const pickableLabel = document.createElement('label');
+    pickableLabel.className = 'geoparquet-control-check';
+    const pickableInput = document.createElement('input');
+    pickableInput.type = 'checkbox';
+    pickableInput.checked = this.pickable;
+    pickableInput.addEventListener('change', () => this.setPickable(pickableInput.checked));
+    const pickableText = document.createElement('span');
+    pickableText.textContent = 'Show attribute popup on feature click';
+    pickableLabel.appendChild(pickableInput);
+    pickableLabel.appendChild(pickableText);
+    section.appendChild(pickableLabel);
+
+    if (this.layers.length > 0) {
       const clearButton = document.createElement('button');
       clearButton.className = 'geoparquet-control-secondary-button';
       clearButton.type = 'button';
-      clearButton.textContent = 'Clear';
+      clearButton.textContent = 'Clear all';
       clearButton.disabled = this.loading;
       clearButton.addEventListener('click', () => this.clear());
       section.appendChild(clearButton);
@@ -708,7 +952,7 @@ export class GeoParquetControl implements IControl {
     return section;
   }
 
-  private renderStatusSection(): HTMLElement {
+  private renderStatusSection(activeLayer: LoadedGeoParquetLayer | null): HTMLElement {
     const section = document.createElement('div');
     section.className = 'geoparquet-control-section';
     if (this.statusMessage) {
@@ -723,7 +967,7 @@ export class GeoParquetControl implements IControl {
       error.textContent = this.error;
       section.appendChild(error);
     }
-    this.warnings.forEach((warning) => {
+    activeLayer?.warnings.forEach((warning) => {
       const warningElement = document.createElement('div');
       warningElement.className = 'geoparquet-control-warning';
       warningElement.textContent = `${warning.title}: ${warning.detail}`;
@@ -732,20 +976,69 @@ export class GeoParquetControl implements IControl {
     if (!section.childElementCount) {
       const placeholder = document.createElement('p');
       placeholder.className = 'geoparquet-control-placeholder';
-      placeholder.textContent = 'Load a GeoParquet file to render it on the map.';
+      placeholder.textContent =
+        this.layers.length === 0
+          ? 'Load one or more GeoParquet files to render them on the map.'
+          : 'Select a layer to inspect settings and attributes.';
       section.appendChild(placeholder);
     }
     return section;
   }
 
-  private renderMetadataSection(): HTMLElement {
+  private renderLayerSection(): HTMLElement {
+    const section = document.createElement('div');
+    section.className = 'geoparquet-control-section';
+    const title = document.createElement('div');
+    title.className = 'geoparquet-control-section-title';
+    title.textContent = 'Loaded layers';
+    section.appendChild(title);
+
+    const list = document.createElement('div');
+    list.className = 'geoparquet-control-layer-list';
+    this.layers.forEach((layer) => {
+      const row = document.createElement('div');
+      row.className = 'geoparquet-control-layer-row';
+      const label = document.createElement('label');
+      label.className = 'geoparquet-control-check';
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'geoparquet-active-layer';
+      radio.checked = layer.id === this.activeLayerId;
+      radio.addEventListener('change', () => {
+        this.activeLayerId = layer.id;
+        this.renderContent();
+        this.emit('statechange');
+      });
+      const text = document.createElement('span');
+      text.textContent = layer.name;
+      label.appendChild(radio);
+      label.appendChild(text);
+
+      const remove = document.createElement('button');
+      remove.className = 'geoparquet-control-mini-button';
+      remove.type = 'button';
+      remove.textContent = 'Remove';
+      remove.disabled = this.loading;
+      remove.addEventListener('click', () => this.removeLayer(layer.id));
+
+      row.appendChild(label);
+      row.appendChild(remove);
+      list.appendChild(row);
+    });
+    section.appendChild(list);
+    return section;
+  }
+
+  private renderMetadataSection(layer: LoadedGeoParquetLayer): HTMLElement {
     const section = document.createElement('div');
     section.className = 'geoparquet-control-section geoparquet-control-summary';
     const items: [string, string][] = [
-      ['Source', this.displaySource || ''],
-      ['Rows', this.totalRows >= 0 ? this.totalRows.toLocaleString() : 'Unknown'],
-      ['Loaded', Object.keys(this.rows).length.toLocaleString()],
-      ['Geometry', this.primaryGeoColumn ?? 'Not detected'],
+      ['Layer', layer.name],
+      ['Source', layer.displaySource],
+      ['before_id', layer.beforeId ?? ''],
+      ['Rows', layer.totalRows >= 0 ? layer.totalRows.toLocaleString() : 'Unknown'],
+      ['Loaded', Object.keys(layer.rows).length.toLocaleString()],
+      ['Geometry', layer.primaryGeoColumn ?? 'Not detected'],
     ];
     items.forEach(([label, value]) => {
       const row = document.createElement('div');
@@ -758,10 +1051,48 @@ export class GeoParquetControl implements IControl {
       row.appendChild(val);
       section.appendChild(row);
     });
+    const controls = document.createElement('div');
+    controls.className = 'geoparquet-control-grid';
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'geoparquet-control-label';
+    nameLabel.textContent = 'Layer name';
+    const nameInput = document.createElement('input');
+    nameInput.className = 'geoparquet-control-input';
+    nameInput.type = 'text';
+    nameInput.value = layer.name;
+    nameInput.disabled = this.loading;
+    nameInput.addEventListener('change', () => {
+      layer.name = nameInput.value.trim() || this.displayNameFromSource(layer.displaySource);
+      if (this.selectedFeature?.layerId === layer.id) {
+        this.selectedFeature.layerName = layer.name;
+      }
+      this.renderContent();
+      this.emit('statechange');
+    });
+    const beforeLabel = document.createElement('label');
+    beforeLabel.className = 'geoparquet-control-label';
+    beforeLabel.textContent = 'before_id';
+    const beforeInput = document.createElement('input');
+    beforeInput.className = 'geoparquet-control-input';
+    beforeInput.type = 'text';
+    beforeInput.placeholder = 'Map layer id';
+    beforeInput.value = layer.beforeId ?? '';
+    beforeInput.disabled = this.loading;
+    beforeInput.addEventListener('change', () => {
+      layer.beforeId = beforeInput.value.trim() || null;
+      this.renderAllLayers();
+      this.renderContent();
+      this.emit('statechange');
+    });
+    nameLabel.appendChild(nameInput);
+    beforeLabel.appendChild(beforeInput);
+    controls.appendChild(nameLabel);
+    controls.appendChild(beforeLabel);
+    section.appendChild(controls);
     return section;
   }
 
-  private renderColumnSection(): HTMLElement {
+  private renderColumnSection(layer: LoadedGeoParquetLayer): HTMLElement {
     const section = document.createElement('div');
     section.className = 'geoparquet-control-section';
     const title = document.createElement('div');
@@ -777,19 +1108,19 @@ export class GeoParquetControl implements IControl {
     pageSizeInput.type = 'number';
     pageSizeInput.min = '1';
     pageSizeInput.step = '100';
-    pageSizeInput.value = String(this.pageSize);
+    pageSizeInput.value = String(layer.pageSize);
     pageSizeInput.disabled = this.loading;
     pageSizeInput.addEventListener('change', () => {
       const nextPageSize = Number.parseInt(pageSizeInput.value, 10);
       if (Number.isFinite(nextPageSize) && nextPageSize > 0) {
-        this.pageSize = nextPageSize;
+        layer.pageSize = nextPageSize;
       }
     });
     section.appendChild(pageSizeLabel);
     section.appendChild(pageSizeInput);
 
-    const columns = this.schema.filter((column) => !this.geoColumns.includes(column.name));
-    const selected = new Set(this.selectedColumns ?? columns.map((column) => column.name));
+    const columns = layer.schema.filter((column) => !layer.geoColumns.includes(column.name));
+    const selected = new Set(layer.selectedColumns ?? columns.map((column) => column.name));
     const list = document.createElement('div');
     list.className = 'geoparquet-control-column-list';
     columns.slice(0, 30).forEach((column) => {
@@ -800,10 +1131,10 @@ export class GeoParquetControl implements IControl {
       input.checked = selected.has(column.name);
       input.disabled = this.loading;
       input.addEventListener('change', () => {
-        const current = new Set(this.selectedColumns ?? columns.map((col) => col.name));
+        const current = new Set(layer.selectedColumns ?? columns.map((col) => col.name));
         if (input.checked) current.add(column.name);
         else current.delete(column.name);
-        this.selectedColumns = [...current];
+        layer.selectedColumns = [...current];
       });
       const text = document.createElement('span');
       text.textContent = column.name;
@@ -815,24 +1146,19 @@ export class GeoParquetControl implements IControl {
     return section;
   }
 
-  private renderActionSection(): HTMLElement {
+  private renderActionSection(layer: LoadedGeoParquetLayer): HTMLElement {
     const section = document.createElement('div');
     section.className = 'geoparquet-control-section geoparquet-control-actions';
 
     const applyButton = document.createElement('button');
     applyButton.className = 'geoparquet-control-button';
     applyButton.type = 'button';
-    applyButton.textContent = 'Apply';
-    applyButton.disabled = this.loading || !this.source;
+    applyButton.textContent = 'Apply to layer';
+    applyButton.disabled = this.loading;
     applyButton.addEventListener('click', () => {
-      this.rows = {};
-      this.geoArrowResults = [];
-      this.currentOffset = 0;
-      this.filteredCount = null;
-      this.selectedFeature = null;
-      this.renderer?.clear();
+      this.clearLayerData(layer);
       this.runTask('Loading rows...', async () => {
-        await this.executeQuery(0, this.pageSize, this.currentViewportBbox);
+        await this.executeQuery(layer, 0, layer.pageSize, layer.currentViewportBbox);
       }).catch(() => {});
     });
     section.appendChild(applyButton);
@@ -841,17 +1167,17 @@ export class GeoParquetControl implements IControl {
     loadMoreButton.className = 'geoparquet-control-secondary-button';
     loadMoreButton.type = 'button';
     loadMoreButton.textContent = 'Load more';
-    loadMoreButton.disabled = this.loading || !this.getState().hasMore;
-    loadMoreButton.addEventListener('click', () => this.loadMore().catch(() => {}));
+    loadMoreButton.disabled = this.loading || !this.layerHasMore(layer);
+    loadMoreButton.addEventListener('click', () => this.loadMore(layer.id).catch(() => {}));
     section.appendChild(loadMoreButton);
 
-    if (getBboxCovering(this.geoMetadata, this.primaryGeoColumn)) {
+    if (getBboxCovering(layer.geoMetadata, layer.primaryGeoColumn)) {
       const viewportButton = document.createElement('button');
       viewportButton.className = 'geoparquet-control-secondary-button';
       viewportButton.type = 'button';
       viewportButton.textContent = 'Reload viewport';
       viewportButton.disabled = this.loading;
-      viewportButton.addEventListener('click', () => this.reloadViewport().catch(() => {}));
+      viewportButton.addEventListener('click', () => this.reloadViewport(layer.id).catch(() => {}));
       section.appendChild(viewportButton);
     }
 
@@ -863,13 +1189,13 @@ export class GeoParquetControl implements IControl {
     section.className = 'geoparquet-control-section';
     const title = document.createElement('div');
     title.className = 'geoparquet-control-section-title';
-    title.textContent = `Selected #${this.selectedFeature!.index + 1}`;
+    title.textContent = `Selected ${this.selectedFeature!.layerName} #${this.selectedFeature!.index + 1}`;
     section.appendChild(title);
 
     const list = document.createElement('dl');
     list.className = 'geoparquet-control-properties';
     Object.entries(this.selectedFeature!.properties)
-      .filter(([key]) => key !== '__index')
+      .filter(([key]) => !key.startsWith('__'))
       .slice(0, 20)
       .forEach(([key, value]) => {
         const term = document.createElement('dt');
@@ -881,6 +1207,41 @@ export class GeoParquetControl implements IControl {
       });
     section.appendChild(list);
     return section;
+  }
+
+  private createLayerId(): string {
+    return `layer-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+
+  private displayNameFromSource(source: string): string {
+    return source.split(/[\\/]/).pop() || source;
+  }
+
+  private consumeLayerName(source: string): string {
+    const layerName = this.nextLayerName.trim();
+    if (!layerName) return this.displayNameFromSource(source);
+    this.nextLayerName = '';
+    return layerName;
+  }
+
+  private parseUrlList(value: string): string[] {
+    return value
+      .split(/[\n,\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  private escapeHtml(value: string): string {
+    return value.replace(/[&<>"']/g, (char) => {
+      const entities: Record<string, string> = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      };
+      return entities[char];
+    });
   }
 }
 
