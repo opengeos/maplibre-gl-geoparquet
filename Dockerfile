@@ -12,9 +12,6 @@ RUN npm ci
 # Copy source files
 COPY . .
 
-# Download DuckDB extensions
-RUN npm run load-extensions
-
 # Run tests
 RUN npm test
 

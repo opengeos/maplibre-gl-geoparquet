@@ -1,10 +1,5 @@
 import type { AsyncDuckDB, AsyncDuckDBConnection } from '@duckdb/duckdb-wasm';
 import type { Table } from 'apache-arrow';
-import duckdbWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
-import duckdbWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
-import parquetExtensionUrl from '../../../extensions/parquet.duckdb_extension.wasm?url';
-import httpfsExtensionUrl from '../../../extensions/httpfs.duckdb_extension.wasm?url';
-import spatialExtensionUrl from '../../../extensions/spatial.duckdb_extension.wasm?url';
 import type {
   GeoParquetBboxCovering,
   GeoParquetColumn,
@@ -25,10 +20,6 @@ function emitProgress(message: string): void {
   progressListeners.forEach((listener) => listener(message));
 }
 
-function absoluteAssetUrl(url: string): string {
-  return new URL(url, globalThis.location?.href ?? 'http://localhost/').href;
-}
-
 export async function initDB(onProgress?: (message: string) => void): Promise<void> {
   if (database && connection) return;
 
@@ -45,12 +36,22 @@ export async function initDB(onProgress?: (message: string) => void): Promise<vo
   initPromise = (async () => {
     emitProgress('Loading DuckDB...');
     const duckdb = await import('@duckdb/duckdb-wasm');
-    const worker = new Worker(duckdbWorkerUrl);
+
+    // The DuckDB-WASM core (~35 MB) and the parquet/httpfs/spatial extensions
+    // (~26 MB) are fetched from the jsDelivr CDN at runtime rather than bundled,
+    // keeping the published package small. selectBundle picks the build that
+    // matches the browser's WASM feature support (eh, mvp, coi).
+    const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+    const workerUrl = URL.createObjectURL(
+      new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
+    );
+    const worker = new Worker(workerUrl);
     const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
     database = new duckdb.AsyncDuckDB(logger, worker);
 
     emitProgress('Starting DuckDB...');
-    await database.instantiate(duckdbWasmUrl);
+    await database.instantiate(bundle.mainModule, bundle.pthreadWorker);
+    URL.revokeObjectURL(workerUrl);
     await database.open({});
 
     emitProgress('Opening database connection...');
@@ -59,14 +60,20 @@ export async function initDB(onProgress?: (message: string) => void): Promise<vo
     emitProgress('Preloading coordinate systems...');
     await connection.query('SELECT * FROM duckdb_coordinate_systems()');
 
-    const loadExtension = async (name: string, url: string) => {
+    // Resolve the DuckDB version so extensions are pulled from the matching
+    // build on the official signed-extension repository.
+    const versionResult = await connection.query('SELECT version() AS version');
+    const duckdbVersion = String(versionResult.toArray()[0].version);
+    const extensionRepo = `https://extensions.duckdb.org/${duckdbVersion}/wasm_eh`;
+
+    const loadExtension = async (name: string) => {
       emitProgress(`Loading ${name} extension...`);
-      await connection!.query(`LOAD '${absoluteAssetUrl(url).replace(/'/g, "''")}'`);
+      await connection!.query(`LOAD '${extensionRepo}/${name}.duckdb_extension.wasm'`);
     };
 
-    await loadExtension('parquet', parquetExtensionUrl);
-    await loadExtension('httpfs', httpfsExtensionUrl);
-    await loadExtension('spatial', spatialExtensionUrl);
+    await loadExtension('parquet');
+    await loadExtension('httpfs');
+    await loadExtension('spatial');
     progressListeners.clear();
   })();
 

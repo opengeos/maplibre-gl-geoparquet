@@ -131,22 +131,25 @@ function GeoParquetLayer({ map }) {
 Legacy aliases `PluginControl`, `PluginControlReact`, and `usePluginState` are exported for
 template migration, but new code should use the GeoParquet names.
 
+## Runtime requirements
+
+The DuckDB-WASM runtime and its `parquet`, `httpfs`, and `spatial` extensions are loaded
+from public CDNs at runtime (the DuckDB-WASM core from jsDelivr and the extensions from
+`extensions.duckdb.org`) rather than bundled into the package. This keeps the published
+package small, but means the host page needs network access to those origins the first time
+a GeoParquet file is loaded.
+
 ## Development
 
 ```bash
 npm install
-npm run load-extensions
 npm run dev
 ```
-
-The DuckDB `parquet`, `httpfs`, and `spatial` WASM extensions are downloaded into
-`extensions/` during builds.
 
 ## Scripts
 
 | Script | Description |
 |---|---|
-| `npm run load-extensions` | Download DuckDB WASM extensions |
 | `npm run dev` | Start the Vite dev server |
 | `npm run build` | Build the library |
 | `npm run build:examples` | Build the examples site |

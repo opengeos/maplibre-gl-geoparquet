@@ -39,9 +39,8 @@
   ],
   "scripts": {
     "dev": "vite",
-    "load-extensions": "node scripts/load-extensions.js",
-    "build": "npm run load-extensions && tsc -p tsconfig.build.json && vite build",
-    "build:examples": "npm run load-extensions && vite build --config vite.examples.config.ts",
+    "build": "tsc -p tsconfig.build.json && vite build",
+    "build:examples": "vite build --config vite.examples.config.ts",
     "preview": "vite preview",
     "test": "vitest --run",
     "test:ui": "vitest --ui",
