@@ -41,3 +41,7 @@ export {
   buildFilterCondition,
   friendlyError,
 } from './lib/geoparquet/utils';
+
+// DuckDB runtime configuration (CDN / self-hosting)
+export { configureDuckDB } from './lib/geoparquet/duckdb';
+export type { DuckDBSourceConfig } from './lib/geoparquet/duckdb';

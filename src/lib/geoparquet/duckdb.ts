@@ -1,4 +1,4 @@
-import type { AsyncDuckDB, AsyncDuckDBConnection } from '@duckdb/duckdb-wasm';
+import type { AsyncDuckDB, AsyncDuckDBConnection, DuckDBBundles } from '@duckdb/duckdb-wasm';
 import type { Table } from 'apache-arrow';
 import type {
   GeoParquetBboxCovering,
@@ -8,12 +8,55 @@ import type {
 } from '../core/types';
 import { buildWhereClause, escapeSource, quoteIdentifier, type GeoParquetFilter } from './utils';
 
+const DEFAULT_EXTENSION_REPOSITORY = 'https://extensions.duckdb.org';
+
+/**
+ * Overrides for where the DuckDB-WASM runtime and its extensions are loaded from.
+ *
+ * By default the DuckDB-WASM core is fetched from the jsDelivr CDN and the
+ * `parquet`/`httpfs`/`spatial` extensions from the official
+ * `https://extensions.duckdb.org` repository. Self-hosting both keeps the
+ * control working without public CDN access.
+ */
+export interface DuckDBSourceConfig {
+  /**
+   * Custom DuckDB-WASM bundles (the core `.wasm` module and worker URLs).
+   * When omitted, the jsDelivr CDN bundles are used.
+   */
+  bundles?: DuckDBBundles;
+  /**
+   * Base URL of a DuckDB extension repository that mirrors the layout of
+   * `extensions.duckdb.org` (i.e. `<base>/<version>/wasm_eh/<name>.duckdb_extension.wasm`).
+   * Trailing slashes are ignored. Defaults to `https://extensions.duckdb.org`.
+   */
+  extensionRepository?: string;
+}
+
 let database: AsyncDuckDB | null = null;
 let connection: AsyncDuckDBConnection | null = null;
 let initPromise: Promise<void> | null = null;
 let lastProgressMessage: string | null = null;
 const progressListeners = new Set<(message: string) => void>();
 const geometryTypeCache = new Map<string, Record<string, boolean>>();
+
+let customBundles: DuckDBBundles | null = null;
+let extensionRepository = DEFAULT_EXTENSION_REPOSITORY;
+
+/**
+ * Configures where the DuckDB-WASM runtime and extensions are loaded from.
+ *
+ * Call this once before the first GeoParquet file is loaded (DuckDB is
+ * initialized lazily and cached, so changes after initialization have no
+ * effect). Pass only the fields you want to override.
+ */
+export function configureDuckDB(config: DuckDBSourceConfig): void {
+  if (config.bundles !== undefined) {
+    customBundles = config.bundles;
+  }
+  if (config.extensionRepository !== undefined) {
+    extensionRepository = config.extensionRepository.replace(/\/+$/, '') || DEFAULT_EXTENSION_REPOSITORY;
+  }
+}
 
 function emitProgress(message: string): void {
   lastProgressMessage = message;
@@ -38,10 +81,12 @@ export async function initDB(onProgress?: (message: string) => void): Promise<vo
     const duckdb = await import('@duckdb/duckdb-wasm');
 
     // The DuckDB-WASM core (~35 MB) and the parquet/httpfs/spatial extensions
-    // (~26 MB) are fetched from the jsDelivr CDN at runtime rather than bundled,
-    // keeping the published package small. selectBundle picks the build that
-    // matches the browser's WASM feature support (eh, mvp, coi).
-    const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+    // (~26 MB) are fetched at runtime rather than bundled, keeping the published
+    // package small. By default they come from the jsDelivr CDN and
+    // extensions.duckdb.org, but both can be overridden via configureDuckDB for
+    // self-hosting. selectBundle picks the build that matches the browser's WASM
+    // feature support (eh, mvp, coi).
+    const bundle = await duckdb.selectBundle(customBundles ?? duckdb.getJsDelivrBundles());
     const workerUrl = URL.createObjectURL(
       new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
     );
@@ -64,7 +109,7 @@ export async function initDB(onProgress?: (message: string) => void): Promise<vo
     // build on the official signed-extension repository.
     const versionResult = await connection.query('SELECT version() AS version');
     const duckdbVersion = String(versionResult.toArray()[0].version);
-    const extensionRepo = `https://extensions.duckdb.org/${duckdbVersion}/wasm_eh`;
+    const extensionRepo = `${extensionRepository}/${duckdbVersion}/wasm_eh`;
 
     const loadExtension = async (name: string) => {
       emitProgress(`Loading ${name} extension...`);
