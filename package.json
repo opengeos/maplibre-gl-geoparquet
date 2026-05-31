@@ -1,6 +1,6 @@
 {
   "name": "maplibre-gl-geoparquet",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A MapLibre GL JS control for interactive GeoParquet visualization",
   "type": "module",
   "main": "./dist/index.cjs",
