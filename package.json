@@ -5,25 +5,25 @@
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
-  "types": "./dist/types/index.d.ts",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "import": {
-        "types": "./dist/types/index.d.ts",
+        "types": "./dist/index.d.ts",
         "default": "./dist/index.mjs"
       },
       "require": {
-        "types": "./dist/types/index.d.ts",
+        "types": "./dist/index.d.ts",
         "default": "./dist/index.cjs"
       }
     },
     "./react": {
       "import": {
-        "types": "./dist/types/react.d.ts",
+        "types": "./dist/react.d.ts",
         "default": "./dist/react.mjs"
       },
       "require": {
-        "types": "./dist/types/react.d.ts",
+        "types": "./dist/react.d.ts",
         "default": "./dist/react.cjs"
       }
     },
